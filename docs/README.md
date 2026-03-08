@@ -144,7 +144,7 @@ Tier 3: Raw Text Matching     (broad, keywords against conversation text)
 
 During discovery (step 0b), conversations are grouped into clusters based on shared words in their AI-generated topic labels. Every conversation in a cluster is directly mapped to that cluster's category via `cluster_membership.json`. This mapping is **authoritative** — steps 01, 02, and 04 never re-categorize these items.
 
-**Typical accuracy:** ~99.5%. A 1,308-conversation export yielded 608 cluster-assigned items with ~3 errors.
+**Typical accuracy:** ~99.5%. Errors are rare and come from ambiguous topic labels.
 
 ### Tier 2 — Abstract Matching
 
@@ -156,19 +156,19 @@ For conversations not in any cluster, the pipeline matches the conversation's to
 
 For conversations without a usable topic label, the pipeline matches keywords against actual conversation content (title + user/assistant messages). Since raw text is noisy and may contain incidental keyword hits, stricter thresholds apply: **4+ distinct keyword hits** required.
 
-**Typical accuracy:** ~70%. This tier adds coverage at the cost of some false positives. In a 1,308-conversation test, it correctly categorized ~82 items but miscategorized ~35.
+**Typical accuracy:** ~70%. This tier adds coverage at the cost of some false positives from incidental keyword hits in unrelated conversations.
 
 **Used in:** steps 01, 02, and 04.
 
 ### Coverage vs. Accuracy Tradeoff
 
-Tested on a 1,308-conversation export (639 qualifying with 6+ messages):
+The three tiers trade coverage for accuracy. Typical ranges observed:
 
 | Configuration | Coverage | Accuracy | Notes |
 |--------------|----------|----------|-------|
-| Cluster-only (tier 1) | 66.8% | ~99.5% | Highest quality, lowest coverage |
-| Cluster + abstract + text (all tiers) | 76.5% | ~95% | Production default |
-| Looser text matching (min_hits=2) | 81.7% | ~93% | Higher coverage, more noise |
+| Cluster-only (tier 1) | ~65-70% | ~99.5% | Highest quality, lowest coverage |
+| All tiers (production default) | ~75-80% | ~95% | Balanced |
+| Looser text matching (min_hits=2) | ~80-85% | ~93% | Higher coverage, more noise |
 
 ---
 
@@ -203,7 +203,7 @@ Tested on a 1,308-conversation export (639 qualifying with 6+ messages):
 - Never end with generic action words (error, issue, setup, configuration, guide, overview)
 - Use `general-chat` for conversations with no clear single topic
 
-**Batch processing:** ~50 conversations per batch. Total cost ~200K tokens for ~900 conversations.
+**Batch processing:** ~50 conversations per batch.
 
 ---
 
@@ -607,16 +607,9 @@ Sections with no matching destination category go to `learning-various-[date].md
 
 Re-run `--add-sources` to ensure the `## Bronnen` tables reflect the current file state. The source links are based on the original category extracts, so conversations that were moved between files still trace back to their original backup location.
 
-#### Tested results (testrun5)
+#### What to expect
 
-| Metric | Value |
-|--------|-------|
-| Files reviewed | 126 |
-| Misplaced sections identified | 130 |
-| Sections moved to correct file | 130 |
-| Sections moved to `various` | 40 |
-| Files emptied and deleted | 6 |
-| Files remaining after cleanup | 121 |
+Typically ~5% of sections need moving. Files that become empty after all their sections are relocated are automatically deleted. The `various` catch-all usually collects a few dozen orphan sections.
 
 ---
 
@@ -773,17 +766,17 @@ AIKnowledgeDistill/
 ├── shared.py               # Shared utilities
 ├── docs/
 │   └── README.md           # This file
-└── testrun5/               # Example run
+└── myrun/                  # Example run directory
     ├── seed.json
-    ├── abstracts.json       # 919 topic labels
-    ├── cluster_membership.json  # 608 direct assignments
-    ├── config.json          # 92 categories
-    ├── inventory.json       # 1308 conversations
+    ├── abstracts.json       # Topic labels per conversation
+    ├── cluster_membership.json  # Direct conv_id → category mappings
+    ├── config.json          # Categories, keywords, triage rules
+    ├── inventory.json       # One entry per conversation
     ├── CHECKLIST.md
-    ├── category_extracts/   # 126 extract files (with conv IDs + backup refs)
+    ├── category_extracts/   # Extract files (with conv IDs + backup refs)
     └── knowledge/           # Distilled knowledge files
-        ├── learning-docker-compose-20260308.md  # includes ## Bronnen section
-        ├── learning-various-20260308.md         # catch-all for orphan sections
+        ├── learning-docker-compose-yyyymmdd.md  # includes ## Bronnen section
+        ├── learning-various-yyyymmdd.md         # catch-all for orphan sections
         └── ...
 ```
 
@@ -872,33 +865,16 @@ python run.py --config myrun/config.json
 
 ---
 
-## Tested Results
-
-Validated against a 1,308-conversation ChatGPT export (April 2023 — March 2026, mixed English/Dutch):
-
-| Metric | Value |
-|--------|-------|
-| Total conversations | 1,308 |
-| Qualifying (6+ messages) | 639 |
-| Cluster-assigned | 608 (92 categories) |
-| Coverage (qualifying) | 76.5% |
-| Overall accuracy | ~95% |
-| Categories produced | 92 |
-| Distillable categories (3+ qualifying) | 77 |
-| Knowledge files produced (after distillation) | 126 |
-| Knowledge files after reorganization | 121 (6 emptied, 1 catch-all added) |
-| Misplaced sections identified | 130 |
-| Sections moved to correct file | 130 |
-| Source-linked knowledge files | 120 |
+## Expected Results
 
 ### Quality by Tier
 
-| Tier | Items | Accuracy | Notes |
-|------|-------|----------|-------|
-| Cluster membership | 608 | ~99.5% | 3 errors (topic label ambiguity) |
-| Keyword matching | 117 | ~70% | 35 errors (incidental keyword hits) |
-| **Overall** | **725** | **~95%** | Cluster quality drives the aggregate |
+| Tier | Accuracy | Notes |
+|------|----------|-------|
+| Cluster membership | ~99.5% | Errors from ambiguous topic labels |
+| Keyword matching | ~70% | Errors from incidental keyword hits |
+| **Overall** | **~95%** | Cluster quality drives the aggregate |
 
 ### Remaining Uncategorized
 
-The ~120 uncategorized qualifying conversations are genuinely unique one-off topics (biometrics, fridge repair, perfume shopping, etc.) that don't cluster with anything. ~20 of these have `general-chat` as their topic label, meaning even AI couldn't identify a clear topic.
+Expect ~15-20% of qualifying conversations to remain uncategorized. These are typically genuinely unique one-off topics that don't cluster with anything, or conversations where even AI couldn't identify a clear single topic (`general-chat` label).
