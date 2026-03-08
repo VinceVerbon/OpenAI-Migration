@@ -173,7 +173,7 @@ def scan_knowledge(knowledge_dir):
     for filename in os.listdir(knowledge_dir):
         if filename.startswith("learning-") and filename.endswith(".md"):
             # Extract category from learning-[category]-[date].md
-            parts = filename.replace("learning-", "").replace(".md", "")
+            parts = filename.removeprefix("learning-").removesuffix(".md")
             # Remove the date suffix (last 8 chars + dash)
             if len(parts) > 9 and parts[-9] == "-" and parts[-8:].isdigit():
                 cat = parts[:-9]

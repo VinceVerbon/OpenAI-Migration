@@ -12,6 +12,10 @@ output/
 # Test runs (contain generated data, not source)
 testrun*/
 
+# Generated pipeline output (real copies live inside testrun dirs)
+config.json
+cluster_membership.json
+
 # IDE
 .vscode/
 .idea/
