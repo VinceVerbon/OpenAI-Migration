@@ -4,6 +4,73 @@ Shared utilities for AIKnowledgeDistill pipeline scripts.
 import re
 
 
+# ─── Language Detection ──────────────────────────────────────────────────────
+
+# Top function words per language (appear frequently in any topic)
+LANG_MARKERS = {
+    "en": {
+        "the", "is", "are", "was", "were", "have", "has", "been", "will",
+        "would", "could", "should", "with", "from", "this", "that", "what",
+        "which", "there", "their", "they", "your", "about", "into", "just",
+        "also", "been", "being", "does", "doing", "during", "before", "after",
+        "between", "those", "these", "through", "while", "where", "here",
+    },
+    "nl": {
+        "een", "het", "van", "dat", "die", "niet", "ook", "als", "zijn",
+        "maar", "dan", "bij", "heb", "moet", "naar", "geen", "wel", "dit",
+        "dus", "deze", "aan", "nog", "hebben", "heeft", "wordt", "haar",
+        "zij", "wij", "hij", "jullie", "hun", "veel", "weinig", "gaan",
+        "doen", "zien", "komen", "staan", "geven", "laten", "houden",
+        "eigenlijk", "natuurlijk", "daarom", "ongeveer", "verder", "altijd",
+        "nooit", "soms", "vaak", "gewoon", "beetje", "volgens", "namelijk",
+    },
+    "fr": {
+        "les", "des", "une", "est", "pas", "que", "qui", "dans", "sur",
+        "pour", "avec", "plus", "sont", "nous", "vous", "ils", "elle",
+        "mais", "aussi", "cette", "tout", "bien", "fait", "peut", "comme",
+        "leurs", "entre", "encore", "alors", "depuis", "avant", "autres",
+    },
+    "de": {
+        "der", "die", "das", "ein", "eine", "ist", "sind", "war", "hat",
+        "mit", "auf", "fur", "von", "den", "dem", "des", "sich", "nicht",
+        "auch", "noch", "aber", "wird", "oder", "wenn", "nach", "kann",
+        "nur", "sehr", "dann", "hier", "diese", "diesem", "dieser",
+    },
+    "es": {
+        "los", "las", "una", "del", "por", "con", "para", "que", "son",
+        "pero", "como", "mas", "fue", "hay", "tiene", "desde", "esta",
+        "cuando", "entre", "puede", "todos", "hacia", "donde", "quien",
+    },
+}
+
+LANG_NAMES = {
+    "en": "English",
+    "nl": "Dutch",
+    "fr": "French",
+    "de": "German",
+    "es": "Spanish",
+    "unknown": "Unknown",
+}
+
+
+def detect_language(text, min_words=10):
+    """Detect language from text using function word frequency."""
+    words = re.findall(r"[a-z\u00e0-\u024f]+", text.lower())
+    if len(words) < min_words:
+        return "unknown"
+
+    word_set = set(words)
+    scores = {}
+    for lang, markers in LANG_MARKERS.items():
+        hits = len(word_set & markers)
+        scores[lang] = hits
+
+    if not scores or max(scores.values()) < 3:
+        return "unknown"
+
+    return max(scores, key=scores.get)
+
+
 def keyword_in_text(keyword, text):
     """Check if keyword appears in text with word boundary awareness.
 
@@ -181,6 +248,7 @@ GENERIC_WORDS = {
     "turn0search4", "turn0search5", "turn0search6", "turn0search7",
     "turn0search8", "turn0search9", "turn0search10",
     "turn0product0", "turn0product1", "turn0product2", "turn0product3",
+    "turn0product4", "turn0product5", "turn0product6", "turn0product7",
     "referenced_image_ids", "x1024",
 }
 

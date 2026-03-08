@@ -16,14 +16,16 @@ Seed config format (all fields optional except backup_dir):
 {
   "backup_dir": "/path/to/OpenAI-Export",
 
-  // Language strategy for output knowledge files:
-  //   "unified"    - translate everything to target_language (default)
-  //   "preserve"   - keep original language, tag output files (e.g. infra-nl.json)
-  //   "bilingual"  - include both original + translated in each file
-  "language_strategy": "unified",
+  // Language strategy for output knowledge files (required):
+  //   "unified"      - translate to dominant language (auto-detected, no target needed)
+  //   "preserve"     - split files by language (e.g. infra-en.json, infra-nl.json)
+  //   "translate"    - translate everything to target_language (requires target_language)
+  //   "multilingual" - include both original + translated (requires target_language)
+  "language_strategy": "translate",
 
-  // Target language when strategy is "unified" or "bilingual"
+  // Target language when strategy is "translate" or "multilingual"
   // Use ISO 639-1 code: "en", "nl", "de", "fr", "es", etc.
+  // Not needed for "unified" (auto-detected) or "preserve"
   "target_language": "en",
 
   // Minimum cluster size to propose as category (default: 5)
@@ -45,76 +47,9 @@ import argparse
 import math
 from collections import Counter, defaultdict
 from datetime import datetime
-from shared import tokenize, STOP_WORDS, GENERIC_WORDS
+from shared import tokenize, STOP_WORDS, GENERIC_WORDS, detect_language, LANG_MARKERS, LANG_NAMES
 
 sys.stdout.reconfigure(encoding="utf-8")
-
-# ─── Language Detection ──────────────────────────────────────────────────────
-
-# Top function words per language (appear frequently in any topic)
-LANG_MARKERS = {
-    "en": {
-        "the", "is", "are", "was", "were", "have", "has", "been", "will",
-        "would", "could", "should", "with", "from", "this", "that", "what",
-        "which", "there", "their", "they", "your", "about", "into", "just",
-        "also", "been", "being", "does", "doing", "during", "before", "after",
-        "between", "those", "these", "through", "while", "where", "here",
-    },
-    "nl": {
-        "een", "het", "van", "dat", "die", "niet", "ook", "als", "zijn",
-        "maar", "dan", "bij", "heb", "moet", "naar", "geen", "wel", "dit",
-        "dus", "deze", "aan", "nog", "hebben", "heeft", "wordt", "haar",
-        "zij", "wij", "hij", "jullie", "hun", "veel", "weinig", "gaan",
-        "doen", "zien", "komen", "staan", "geven", "laten", "houden",
-        "eigenlijk", "natuurlijk", "daarom", "ongeveer", "verder", "altijd",
-        "nooit", "soms", "vaak", "gewoon", "beetje", "volgens", "namelijk",
-    },
-    "fr": {
-        "les", "des", "une", "est", "pas", "que", "qui", "dans", "sur",
-        "pour", "avec", "plus", "sont", "nous", "vous", "ils", "elle",
-        "mais", "aussi", "cette", "tout", "bien", "fait", "peut", "comme",
-        "leurs", "entre", "encore", "alors", "depuis", "avant", "autres",
-    },
-    "de": {
-        "der", "die", "das", "ein", "eine", "ist", "sind", "war", "hat",
-        "mit", "auf", "fur", "von", "den", "dem", "des", "sich", "nicht",
-        "auch", "noch", "aber", "wird", "oder", "wenn", "nach", "kann",
-        "nur", "sehr", "dann", "hier", "diese", "diesem", "dieser",
-    },
-    "es": {
-        "los", "las", "una", "del", "por", "con", "para", "que", "son",
-        "pero", "como", "mas", "fue", "hay", "tiene", "desde", "esta",
-        "cuando", "entre", "puede", "todos", "hacia", "donde", "quien",
-    },
-}
-
-LANG_NAMES = {
-    "en": "English",
-    "nl": "Dutch",
-    "fr": "French",
-    "de": "German",
-    "es": "Spanish",
-    "unknown": "Unknown",
-}
-
-
-def detect_language(text, min_words=10):
-    """Detect language from text using function word frequency."""
-    words = re.findall(r"[a-z\u00e0-\u024f]+", text.lower())
-    if len(words) < min_words:
-        return "unknown"
-
-    word_set = set(words)
-    scores = {}
-    for lang, markers in LANG_MARKERS.items():
-        hits = len(word_set & markers)
-        scores[lang] = hits
-
-    if not scores or max(scores.values()) < 3:
-        return "unknown"
-
-    return max(scores, key=scores.get)
-
 
 # ─── Conversation Parsing ────────────────────────────────────────────────────
 
@@ -520,35 +455,56 @@ def main():
     print(f"CONFIGURATION")
     print(f"{'─' * 60}")
 
-    # Language strategy
+    # Language strategy (mandatory choice)
     if "language_strategy" in seed:
         lang_strategy = seed["language_strategy"]
+        valid = ("unified", "preserve", "translate", "multilingual")
+        if lang_strategy not in valid:
+            print(f"ERROR: language_strategy must be one of: {', '.join(valid)}")
+            sys.exit(1)
         print(f"\nLanguage strategy: {lang_strategy} (from seed config)")
     elif interactive:
         lang_strategy = ask_choice(
             "How should output knowledge files handle languages?",
             [
-                ("unified", "Unified — translate everything to one language"),
-                ("preserve", "Preserve — keep original language, tag files (e.g. infra-nl.json, infra-en.json)"),
-                ("bilingual", "Bilingual — include both original + translation in each file"),
+                ("unified", "Unified — all conversations in one file per category, as-is"),
+                ("preserve", "Preserve — split files by language (e.g. infra-en.json, infra-nl.json)"),
+                ("translate", "Translate — output everything in one target language"),
+                ("multilingual", "Multilingual — include both original + translated version"),
             ],
             default="unified",
         )
     else:
-        lang_strategy = "unified"
+        print("ERROR: language_strategy is required. Set it in seed config or run interactively.")
+        sys.exit(1)
 
     # Target language
+    # - unified: auto-detected from most dominant language in the export
+    # - translate/multilingual: user must specify
+    # - preserve: not needed
     target_lang = None
-    if lang_strategy in ("unified", "bilingual"):
+
+    # Auto-detect dominant language for reference
+    most_common_lang = lang_counts.most_common(1)[0][0]
+    if most_common_lang == "unknown":
+        # Fall back to second most common, or "en"
+        for lang, _ in lang_counts.most_common():
+            if lang != "unknown":
+                most_common_lang = lang
+                break
+        else:
+            most_common_lang = "en"
+
+    if lang_strategy == "unified":
+        # Auto-detect: unify to the most dominant language
+        target_lang = most_common_lang
+        print(f"Target language: {LANG_NAMES.get(target_lang, target_lang)} (auto-detected dominant)")
+
+    elif lang_strategy in ("translate", "multilingual"):
         if "target_language" in seed:
             target_lang = seed["target_language"]
             print(f"Target language: {LANG_NAMES.get(target_lang, target_lang)} (from seed config)")
         elif interactive:
-            # Suggest most common language as default
-            most_common_lang = lang_counts.most_common(1)[0][0]
-            if most_common_lang == "unknown":
-                most_common_lang = "en"
-
             lang_options = []
             for lang, count in lang_counts.most_common():
                 if lang == "unknown":
@@ -560,12 +516,13 @@ def main():
                 lang_options.append(("en", "English"))
 
             target_lang = ask_choice(
-                "Target language for knowledge files:",
+                f"Target language for {lang_strategy} output:",
                 lang_options,
                 default=most_common_lang,
             )
         else:
-            target_lang = "en"
+            print(f"ERROR: target_language is required when language_strategy is '{lang_strategy}'.")
+            sys.exit(1)
 
     # Category selection
     categories = {}

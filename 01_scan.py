@@ -12,7 +12,7 @@ import sys
 import argparse
 from datetime import datetime
 from collections import defaultdict
-from shared import keyword_in_text
+from shared import keyword_in_text, detect_language
 
 sys.stdout.reconfigure(encoding="utf-8")
 
@@ -130,6 +130,12 @@ def main():
         dt = datetime.fromtimestamp(create_time) if create_time else None
         date_str = dt.strftime("%Y-%m-%d") if dt else "unknown"
 
+        # Language detection from title + first user messages
+        user_text = " ".join(
+            text[:500] for _, role, text in messages[:5] if role == "user"
+        )
+        language = detect_language(title + " " + user_text)
+
         # Categorize
         search_text = (title + " " + first_user).lower()
 
@@ -159,6 +165,7 @@ def main():
             "title": title,
             "date": date_str,
             "message_count": msg_count,
+            "language": language,
             "category": category,
             "triage": triage,
             "outdated_reason": outdated_reason,
