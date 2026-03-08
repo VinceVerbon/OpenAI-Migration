@@ -11,6 +11,7 @@ import os
 import sys
 import argparse
 from collections import defaultdict
+from shared import keyword_in_text
 
 sys.stdout.reconfigure(encoding="utf-8")
 
@@ -57,7 +58,7 @@ def categorize_deep(search_text, categories):
             kw_list = keywords.get("strong", []) + keywords.get("medium", [])
         else:
             kw_list = keywords
-        score = sum(1 for kw in kw_list if kw in search_text)
+        score = sum(1 for kw in kw_list if keyword_in_text(kw, search_text))
         if score > best_score:
             best_score = score
             best_cat = cat

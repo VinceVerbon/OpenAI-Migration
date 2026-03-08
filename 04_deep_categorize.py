@@ -11,6 +11,7 @@ import os
 import sys
 import argparse
 from collections import defaultdict
+from shared import keyword_in_text
 
 sys.stdout.reconfigure(encoding="utf-8")
 
@@ -68,8 +69,8 @@ def score_categories(search_text, categories, min_confidence=2):
             strong = []
             medium = keywords
 
-        strong_hits = sum(1 for kw in strong if kw in search_text)
-        medium_hits = sum(1 for kw in medium if kw in search_text)
+        strong_hits = sum(1 for kw in strong if keyword_in_text(kw, search_text))
+        medium_hits = sum(1 for kw in medium if keyword_in_text(kw, search_text))
         score = strong_hits * 3 + medium_hits
         if score >= min_confidence:
             scores[cat] = score

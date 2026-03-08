@@ -3,44 +3,44 @@
   "output_dir": "/path/to/knowledge/output",
   "categories": {
     "infrastructure": {
-      "strong": ["docker", "traefik", "nginx", "kubernetes", "ansible", "terraform"],
-      "medium": ["server", "ssh", "linux", "hosting", "dns", "ssl", "firewall", "backup"]
+      "strong": ["docker", "traefik", "nginx", "kubernetes", "ansible", "terraform", "compose.yaml", "dockerfile"],
+      "medium": ["server", "ssh", "linux", "hosting", "dns", "ssl", "firewall", "backup", "deploy", "container", "vm", "virtual machine", "cloud", "aws", "azure", "gcp", "cron", "systemd", "apache", "proxy"]
     },
     "development": {
-      "strong": ["def ", "function ", "class ", "import ", "console.log", "git commit"],
-      "medium": ["python", "javascript", "typescript", "react", "api", "database", "sql"]
+      "strong": ["def ", "function ", "class ", "import ", "console.log", "git commit", "stack overflow", "github"],
+      "medium": ["python", "javascript", "typescript", "react", "api", "database", "sql", "code", "programming", "debug", "error", "exception", "variable", "array", "json", "xml", "html", "css", "php", "java", "ruby", "node", "npm", "pip", "regex", "algorithm", "excel", "spreadsheet", "formula", "macro", "vba", "powershell", "bash", "script", "cad", "freecad", "fusion 360"]
     },
     "ai-tools": {
-      "strong": ["chatgpt", "gpt-4", "dall-e", "midjourney", "claude", "copilot", "ollama"],
-      "medium": ["prompt", "llm", "token", "ai model", "embedding", "fine-tune"]
+      "strong": ["chatgpt", "gpt-4", "gpt-3", "dall-e", "midjourney", "claude", "copilot", "ollama", "stable diffusion", "hugging face"],
+      "medium": ["prompt", "llm", "token", "ai model", "embedding", "fine-tune", "neural", "machine learning", "deep learning", "inference", "transformer", "openai", "anthropic", "gemini", "image generation"]
     },
     "business": {
-      "strong": ["invoice", "client", "contract", "pricing", "strategy", "proposal"],
-      "medium": ["meeting", "project", "planning", "budget", "stakeholder", "governance"]
+      "strong": ["invoice", "client", "contract", "pricing", "strategy", "proposal", "itil", "sla"],
+      "medium": ["meeting", "project", "planning", "budget", "stakeholder", "governance", "management", "workflow", "process", "deadline", "deliverable", "requirement", "agile", "scrum", "kanban", "consultant", "freelance", "roi"]
     },
     "writing": {
       "strong": ["translate", "proofread", "rewrite", "draft", "article", "blog post"],
-      "medium": ["write", "text", "email", "newsletter", "communication", "summary"]
+      "medium": ["write", "text", "email", "newsletter", "communication", "summary", "grammar", "spelling", "tone", "paragraph", "essay", "report", "documentation", "copywriting"]
     },
     "personal": {
       "strong": ["recipe", "travel", "holiday", "hobby", "birthday", "gift"],
-      "medium": ["health", "fitness", "family", "school", "game", "music", "book"]
+      "medium": ["health", "fitness", "family", "school", "game", "music", "book", "cooking", "vacation", "kids", "parenting", "pet", "garden", "home", "diy", "craft", "sport"]
     },
     "networking": {
-      "strong": ["vlan", "subnet", "dhcp", "access point", "mesh", "vpn", "wireguard"],
-      "medium": ["wifi", "network", "router", "switch", "ethernet", "firewall"]
+      "strong": ["vlan", "subnet", "dhcp", "access point", "mesh", "vpn", "wireguard", "openvpn", "tailscale"],
+      "medium": ["wifi", "network", "router", "switch", "ethernet", "firewall", "tcp", "udp", "ip address", "port", "dns", "nat", "gateway", "bandwidth", "latency", "packet"]
     },
     "security": {
-      "strong": ["1password", "bitwarden", "yubikey", "passkey", "oauth", "saml", "sso"],
-      "medium": ["password", "mfa", "2fa", "authentication", "encryption", "certificate"]
+      "strong": ["1password", "bitwarden", "yubikey", "passkey", "oauth", "saml", "sso", "zero trust"],
+      "medium": ["password", "mfa", "2fa", "authentication", "encryption", "certificate", "vulnerability", "exploit", "firewall", "malware", "phishing", "backup", "recovery", "audit", "compliance"]
     },
     "hardware": {
-      "strong": ["raspberry pi", "arduino", "esp32", "3d print", "nas"],
-      "medium": ["laptop", "monitor", "usb", "ssd", "firmware", "driver", "bluetooth"]
+      "strong": ["raspberry pi", "arduino", "esp32", "3d print", "nas", "soldering", "oscilloscope"],
+      "medium": ["laptop", "monitor", "usb", "ssd", "firmware", "driver", "bluetooth", "sensor", "led", "pcb", "resistor", "capacitor", "mosfet", "voltage", "ampere", "watt", "laser", "cnc", "multimeter", "circuit"]
     },
     "media": {
-      "strong": ["premiere", "photoshop", "canva", "figma", "obs", "ffmpeg"],
-      "medium": ["video", "audio", "podcast", "design", "logo", "animation"]
+      "strong": ["premiere", "photoshop", "canva", "figma", "obs", "ffmpeg", "lightroom", "davinci resolve"],
+      "medium": ["video", "audio", "podcast", "design", "logo", "animation", "render", "edit", "photo", "image", "thumbnail", "streaming", "recording", "camera", "microphone", "resolution"]
     }
   },
   "triage": {
