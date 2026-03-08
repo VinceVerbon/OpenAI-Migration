@@ -524,7 +524,7 @@ This provides full traceability from any distilled knowledge item back to the co
 
 **⚠ Cost warning:** This step requires AI agents to read ALL knowledge files in depth to identify misplaced content. This has a high token cost relative to the rest of the pipeline. The MOVES list must be curated from the review results before the script can run. Only proceed if topical consistency matters for your use case.
 
-The categorization pipeline achieves ~95% accuracy, but ~5% of conversations end up in the wrong category. After distillation, this surfaces as sections that don't belong in their file's topic. This script automates the cleanup.
+**Why this exists:** The categorization pipeline achieves ~95% accuracy, but ~5% of conversations end up in the wrong category. After distillation, this surfaces as sections that clearly don't belong in their file's topic — e.g., a rosemary cooking tip in a Linux administration file, or a Roblox display fix in an iOS troubleshooting file. Because the knowledge files are already condensed (~50 lines average), reviewing and reorganizing them is far cheaper than re-tuning the categorization pipeline.
 
 **Parameters:**
 
@@ -540,24 +540,83 @@ python reorganize_knowledge.py --dir myrun/knowledge --dry-run
 
 # Execute moves
 python reorganize_knowledge.py --dir myrun/knowledge
+
+# Re-add source links after reorganization (idempotent)
+python 06_distill.py --add-sources --dir myrun/
 ```
 
-**How it works:**
-1. Reads all `learning-*.md` files
-2. Splits each file by `##` headings
-3. Matches section headings against a curated `MOVES` list (source → destination)
+#### How it works
+
+1. Reads all `learning-*.md` files into memory
+2. Splits each file into sections by `##` headings
+3. Matches section headings against a curated `MOVES` list
 4. Removes matched sections from source files, appends them to destination files
-5. Sections with no matching category go to `learning-various-[date].md`
+5. Sections with no matching destination go to `learning-various-[date].md` (catch-all)
 6. Deletes files that become empty after all their sections are moved
+7. Reports: moves executed, headings not found, emptied files
 
-**The MOVES list** is curated by reviewing all knowledge files for topical consistency (typically via AI agents reading each file). It lives in the script as a Python list of `(source_category, heading_substring, destination_category)` tuples.
+**Section matching:** The script matches on `##`-level headings only. Sub-sections (`###` and below) travel with their parent `##` section. This means a `### Subsection` under `## Parent` will move with `## Parent` — you don't need separate move entries for sub-sections.
 
-**Workflow for populating the MOVES list:**
-1. Have AI agents read all knowledge files in batches (25-30 files per agent)
-2. For each file, flag sections that don't belong topically
-3. Suggest destination categories from the existing 126-category list
-4. Add entries to the MOVES list
-5. Run with `--dry-run` to verify, then execute
+#### The MOVES list
+
+A Python list of tuples in the script itself:
+
+```python
+MOVES = [
+    # (source_category, heading_substring, destination_category)
+    ("excel-formula", "RSA encryptie", "quantum-computing"),
+    ("usage-linux", "Rozemarijn in de keuken", "recipe-calorie"),
+    ("code-claude", "LoRaWAN GPS", "arduino-nano"),
+    ("business-servicenow", "Anonieme SMS", "various"),  # no matching category
+    ...
+]
+```
+
+- `source_category` — the file to remove the section from
+- `heading_substring` — case-insensitive match against the `##` heading text
+- `destination_category` — the file to append the section to (`"various"` for the catch-all)
+
+#### Populating the MOVES list (AI review)
+
+This is the expensive part. Run 5 parallel AI agents, each reviewing ~25 knowledge files:
+
+**Agent instructions:**
+1. Read each file thoroughly
+2. Identify the file's core topic from its title and main content
+3. Flag any `##` section that is about a clearly different subject
+4. For each misplaced section, suggest a destination from the full category list
+5. Output a structured report: file name, section heading, suggested destination, reason
+
+**What to flag:**
+- Sections about an entirely different domain (e.g., cooking tips in a networking file)
+- Content that has a dedicated category elsewhere (e.g., ArchiMate content outside `archimate-bpmn`)
+- Keyword-driven miscategorization (e.g., "Power BI" landing in `power-voltage` because of "power")
+
+**What NOT to flag:**
+- Tangential but related content (e.g., a camper antenna section in a mobile router file)
+- Sub-sections (`###`) that belong to their parent `##` context
+- Content that is borderline — when in doubt, leave it in place
+
+**After the review:** Consolidate agent reports into the `MOVES` list, run `--dry-run` to verify all headings match, fix any mismatches, then execute.
+
+#### The `various` catch-all
+
+Sections with no matching destination category go to `learning-various-[date].md`. This file collects genuinely miscellaneous knowledge fragments: motor oil viscosity, violin tuning, Andorra geography, PowerPoint tips, etc. It's a legitimate output — not every piece of knowledge fits a category.
+
+#### After reorganization
+
+Re-run `--add-sources` to ensure the `## Bronnen` tables reflect the current file state. The source links are based on the original category extracts, so conversations that were moved between files still trace back to their original backup location.
+
+#### Tested results (testrun5)
+
+| Metric | Value |
+|--------|-------|
+| Files reviewed | 126 |
+| Misplaced sections identified | 130 |
+| Sections moved to correct file | 130 |
+| Sections moved to `various` | 40 |
+| Files emptied and deleted | 6 |
+| Files remaining after cleanup | 121 |
 
 ---
 
