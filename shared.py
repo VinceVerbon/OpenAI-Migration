@@ -74,18 +74,16 @@ def detect_language(text, min_words=10):
 def keyword_in_text(keyword, text):
     """Check if keyword appears in text with word boundary awareness.
 
-    Short keywords (<=4 chars) like 'sso', 'ssh', 'api' require word
-    boundaries to prevent false matches inside other words like
-    'espresso', 'accessible', 'capital'.
-
-    Longer keywords and multi-word phrases use simple substring matching
-    since they're specific enough (e.g., 'docker', 'raspberry pi').
+    All single-word keywords use word boundary matching to prevent false
+    positives like 'compose' matching 'composers' or 'design' matching
+    'designated'. Multi-word phrases use substring matching since they're
+    inherently specific (e.g., 'raspberry pi', 'power bi').
     """
-    if len(keyword) <= 4 and " " not in keyword:
+    if " " not in keyword:
         pattern = r"(?<![a-z])" + re.escape(keyword) + r"(?![a-z])"
         return bool(re.search(pattern, text, re.IGNORECASE))
     else:
-        return keyword in text
+        return keyword.lower() in text.lower()
 
 
 # ─── Stop Words (EN + NL + FR) ──────────────────────────────────────────────
@@ -238,6 +236,10 @@ GENERIC_WORDS = {
     "fout", "lekker", "zegt", "meteen", "lagere", "voorkomen",
     "nadruk", "benadrukt", "verandering", "vastgelegd", "wijzigingen",
     "beschrijft", "lengte", "rechts",
+    # Dutch reference/connector words (pass stop word filter but aren't topics)
+    "hierbij", "daarbij", "daarmee", "daarin", "daarvoor", "daarvan",
+    "daaruit", "hiervan", "hierin", "hiermee", "hierop", "hiervoor",
+    "waarop", "waarvan", "waarmee", "waarvoor", "waarin", "waaruit",
     # English generic (remaining)
     "managing", "effectively", "principles", "creating", "consider",
     "maintain", "suitable", "generate", "offers", "advanced",
@@ -250,6 +252,24 @@ GENERIC_WORDS = {
     "turn0product0", "turn0product1", "turn0product2", "turn0product3",
     "turn0product4", "turn0product5", "turn0product6", "turn0product7",
     "referenced_image_ids", "x1024",
+    # Image/DALL-E description words (not topics)
+    "blue", "bright", "yellow", "green", "dark", "light", "black", "white",
+    "wearing", "hair", "large", "scene", "color", "colors", "sharp",
+    "overall", "tall", "bold", "standing", "sitting", "holding", "photo",
+    "person", "woman", "background", "foreground", "portrait", "realistic",
+    "transparent", "logo", "visible", "smooth", "texture", "shadow",
+    "illustration", "cartoon", "rendering", "composition", "visual",
+    "suggesties", "zoeken",
+    # Assistant response filler (not topics — these leak from GPT's writing style)
+    "crucial", "specifically", "accurate", "focused", "required",
+    "related", "controls", "external",
+    "needed", "shows", "choose", "enough", "better",
+    "errors", "focuses",
+    "referenced",
+    "deliverables", "resultaten",
+    "gestandaardiseerde",
+    "toepassing", "maximale", "betrouwbare", "minimale",
+    "begrip", "vermeld",
 }
 
 

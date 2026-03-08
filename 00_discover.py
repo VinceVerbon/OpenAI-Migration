@@ -97,106 +97,111 @@ def detect_custom_gpt(conv):
 
 # ─── Topic Clustering ────────────────────────────────────────────────────────
 
-def discover_clusters(conversations, min_cluster_size=5):
-    """Find natural topic clusters using IDF-weighted distinctiveness.
+# Words that commonly appear in topic labels but describe format/meta,
+# not a domain. These must never become cluster anchors.
+# Includes both format words (comparison, overview) and generic nouns
+# that produce garbage clusters (system, update, control, code).
+ABSTRACT_GENERIC = {
+    # Format/meta words
+    "comparison", "overview", "request", "identification", "classification",
+    "definition", "explanation", "recommendations", "guide", "tutorial",
+    "troubleshooting", "general-chat", "creative", "writing",
+    # Language names
+    "dutch", "english", "german", "french", "spanish", "translation",
+    # Generic nouns that match across unrelated domains
+    "system", "systems", "update", "updates", "contact", "code",
+    "strategy", "transformation", "control", "issue", "issues",
+    "error", "errors", "setup", "tool", "tools", "service", "services",
+    "process", "management", "model", "application", "platform",
+    "device", "devices", "review", "analysis", "conversion",
+    "selection", "advice", "information", "data",
+    # Common words that anchor false clusters across unrelated domains
+    "power", "design", "custom", "column", "date", "smart", "home",
+    "google", "based", "using", "new", "best", "formula", "create",
+    "project", "file", "files", "setting", "settings", "option", "options",
+    "make", "change", "changes", "use", "list", "check", "script",
+    "type", "value", "values", "query", "number", "add", "build",
+    "config", "connection", "install", "integration", "key", "method",
+    "name", "network", "port", "run", "server", "source", "test",
+    "version", "web", "work", "working",
+}
 
-    Instead of raw word frequency, scores words by how distinctive they are
-    (appear in a small fraction of conversations). Then clusters conversations
-    around these distinctive anchor words.
 
-    Returns list of clusters, each with keywords, count, and sample titles.
+def discover_clusters_from_abstracts(abstracts, conversations, min_cluster_size=5):
+    """Cluster conversations using AI-generated topic labels.
+
+    Groups conversations whose topic labels share significant word overlap.
+    Much higher quality than word-frequency clustering because labels
+    capture the actual topic, not statistical noise.
+
+    Args:
+        abstracts: dict mapping conv_id to topic label string
+        conversations: list of (conv, title) tuples
+        min_cluster_size: minimum conversations to form a cluster
+
+    Returns list of clusters with keywords, count, and sample titles.
     """
-    # Build word sets per conversation
-    item_words = {}
-    word_items = defaultdict(set)
-
+    # Build a mapping from conversation index to its abstract words
+    conv_id_to_idx = {}
     for idx, (conv, title) in enumerate(conversations):
-        messages = extract_messages(conv)
-        all_text = title.lower() + " "
-        all_text += " ".join(text[:800] for _, _, text in messages[:10])
-        words = set(
-            w for w in tokenize(all_text)
-            if len(w) >= 4 and w not in GENERIC_WORDS
-        )
-        item_words[idx] = words
-        for w in words:
-            word_items[w].add(idx)
+        conv_id = conv.get("id", "")
+        if conv_id in abstracts:
+            conv_id_to_idx[conv_id] = idx
 
-    n_items = len(item_words)
+    # Tokenize all abstracts
+    label_words = defaultdict(set)   # word → set of conv indices
+    idx_label = {}                    # idx → original label
+
+    for conv_id, label in abstracts.items():
+        idx = conv_id_to_idx.get(conv_id)
+        if idx is None:
+            continue
+        idx_label[idx] = label
+        words = set(
+            w for w in tokenize(label.lower())
+            if len(w) >= 3 and w not in GENERIC_WORDS and w not in ABSTRACT_GENERIC
+        )
+        for w in words:
+            label_words[w].add(idx)
+
+    n_items = len(idx_label)
     if n_items < min_cluster_size * 2:
         return []
 
-    # Compute IDF for each word
-    word_idf = {}
-    for w, items in word_items.items():
-        df = len(items)
-        # Only consider words in enough items but not too many
-        # Strict ceiling: words in >5% of conversations are too generic
-        if df < min_cluster_size or df > n_items * 0.05:
-            continue
-        word_idf[w] = math.log(n_items / (1 + df))
+    # Score words by how many conversations they appear in
+    # (labels are short, so IDF is less useful — use raw frequency)
+    anchor_candidates = sorted(
+        label_words.items(),
+        key=lambda x: -len(x[1])
+    )
 
-    if not word_idf:
-        return []
-
-    # Sort candidate anchor words by IDF (most distinctive first is wrong —
-    # we want words that are distinctive BUT appear in enough conversations).
-    # Score = df * idf² — balances frequency with distinctiveness.
-    anchor_scores = {}
-    for w, idf_val in word_idf.items():
-        df = len(word_items[w])
-        anchor_scores[w] = df * idf_val * idf_val
-
-    # Greedy clustering
+    # Greedy clustering on label words
     used_items = set()
     clusters = []
 
-    for word, _ in sorted(anchor_scores.items(), key=lambda x: -x[1]):
-        available = word_items[word] - used_items
+    for word, items in anchor_candidates:
+        available = items - used_items
         if len(available) < min_cluster_size:
             continue
 
-        # Find co-occurring distinctive words in these items
+        # Find co-occurring words in these conversation labels
         shared_words = Counter()
         for idx in available:
-            for w in item_words.get(idx, set()):
-                if w in word_idf:
+            label = idx_label.get(idx, "")
+            for w in tokenize(label.lower()):
+                if len(w) >= 3 and w not in GENERIC_WORDS and w not in ABSTRACT_GENERIC:
                     shared_words[w] += 1
 
-        # Keep words in at least 40% of cluster
-        min_shared = len(available) * 0.4
-        co_occurring = {
-            w: c for w, c in shared_words.items()
-            if c >= min_shared
-        }
+        # Keep words in ≥20% of cluster (lowered from 30% to capture
+        # sub-topics in diverse clusters like "security")
+        min_shared = len(available) * 0.2
+        co_words = [
+            w for w, c in shared_words.most_common()
+            if c >= min_shared and w != word
+        ]
 
-        if len(co_occurring) < 3:
-            continue
-
-        # Rank keywords by distinctiveness within this cluster
-        # (fraction in cluster vs fraction in corpus)
-        keyword_scores = []
-        for w, cluster_count in co_occurring.items():
-            cluster_frac = cluster_count / len(available)
-            corpus_frac = len(word_items[w]) / n_items
-            # Distinctiveness: how much more this word appears in the cluster
-            # than in the overall corpus
-            if corpus_frac > 0:
-                lift = cluster_frac / corpus_frac
-            else:
-                lift = 0
-            # Only keep words with meaningful lift (>3x more likely in cluster)
-            if lift >= 3.0:
-                keyword_scores.append((w, lift))
-
-        keyword_scores.sort(key=lambda x: -x[1])
-        topic_words = [w for w, _ in keyword_scores[:10]]
-
-        # Need at least 3 distinctive keywords, with 2+ being domain-specific
-        # (length >= 6 chars — short words tend to be function words)
-        domain_words = [w for w in topic_words if len(w) >= 6]
-        if len(topic_words) < 3 or len(domain_words) < 2:
-            continue
+        # Cluster name: anchor word + best co-occurring word
+        topic_words = [word] + co_words[:9]
 
         # Get sample titles
         titles = []
@@ -213,21 +218,186 @@ def discover_clusters(conversations, min_cluster_size=5):
         })
         used_items.update(available)
 
-    # Post-filter: drop clusters where keywords lack domain specificity.
+    # Merge clusters sharing 2+ keywords
+    merged = []
+    skip = set()
+    for i, c1 in enumerate(clusters):
+        if i in skip:
+            continue
+        kw1 = set(c1["keywords"])
+        for j, c2 in enumerate(clusters):
+            if j <= i or j in skip:
+                continue
+            kw2 = set(c2["keywords"])
+            overlap = len(kw1 & kw2)
+            if overlap >= 2:
+                c1["count"] += c2["count"]
+                c1["item_indices"] = c1["item_indices"] | c2["item_indices"]
+                for w in c2["keywords"]:
+                    if w not in kw1:
+                        c1["keywords"].append(w)
+                        kw1.add(w)
+                c1["sample_titles"] = c1["sample_titles"][:5]
+                skip.add(j)
+        merged.append(c1)
+
+    # Enforce minimum 2 usable keywords per cluster.
+    # Single-word categories ("requirements", "error") are ambiguous.
+    # For clusters with only 1 keyword, try to extract a second word
+    # from the most common co-occurring word in their abstract labels.
+    qualified = []
+    for c in merged:
+        usable = [w for w in c["keywords"] if w not in ABSTRACT_GENERIC]
+        if len(usable) >= 2:
+            qualified.append(c)
+        elif len(usable) == 1:
+            # Try harder: find the most common word across abstract labels
+            # in this cluster that isn't already the anchor
+            label_words_counter = Counter()
+            anchor = usable[0]
+            for idx in c.get("item_indices", set()):
+                label = idx_label.get(idx, "")
+                for w in tokenize(label.lower()):
+                    if (len(w) >= 3 and w != anchor
+                            and w not in GENERIC_WORDS
+                            and w not in ABSTRACT_GENERIC):
+                        label_words_counter[w] += 1
+            if label_words_counter:
+                best_second = label_words_counter.most_common(1)[0][0]
+                c["keywords"] = [anchor, best_second] + [
+                    w for w in c["keywords"] if w not in (anchor, best_second)
+                ]
+                qualified.append(c)
+            # If still can't produce 2 words, drop with warning (logged upstream)
+
+    return sorted(qualified, key=lambda x: -x["count"])
+
+
+def discover_clusters_fallback(conversations, min_cluster_size=5):
+    """Fallback: find topic clusters using word frequency when no abstracts available.
+
+    Uses title-anchored IDF clustering. Lower quality than abstract-based
+    clustering but requires no manual step.
+
+    Returns list of clusters, each with keywords, count, and sample titles.
+    """
+    # Build word sets — only title words can anchor clusters
+    item_words = {}
+    title_word_items = defaultdict(set)
+    word_items = defaultdict(set)
+
+    for idx, (conv, title) in enumerate(conversations):
+        messages = extract_messages(conv)
+        user_text = " ".join(
+            text[:800] for _, role, text in messages[:10] if role == "user"
+        )
+        all_text = title.lower() + " " + user_text
+        words = set(
+            w for w in tokenize(all_text)
+            if len(w) >= 4 and w not in GENERIC_WORDS
+        )
+        title_words = set(
+            w for w in tokenize(title.lower())
+            if len(w) >= 4 and w not in GENERIC_WORDS
+        )
+        item_words[idx] = words
+        for w in words:
+            word_items[w].add(idx)
+        for w in title_words:
+            title_word_items[w].add(idx)
+
+    n_items = len(item_words)
+    if n_items < min_cluster_size * 2:
+        return []
+
+    word_idf = {}
+    for w, items in word_items.items():
+        df = len(items)
+        if df < min_cluster_size or df > n_items * 0.05:
+            continue
+        word_idf[w] = math.log(n_items / (1 + df))
+
+    if not word_idf:
+        return []
+
+    # Only title words can be anchors
+    anchor_scores = {}
+    for w, idf_val in word_idf.items():
+        title_df = len(title_word_items.get(w, set()))
+        if title_df < max(min_cluster_size // 2, 3):
+            continue
+        anchor_scores[w] = title_df * idf_val * idf_val
+
+    used_items = set()
+    clusters = []
+
+    for word, _ in sorted(anchor_scores.items(), key=lambda x: -x[1]):
+        available = word_items[word] - used_items
+        if len(available) < min_cluster_size:
+            continue
+
+        shared_words = Counter()
+        for idx in available:
+            for w in item_words.get(idx, set()):
+                if w in word_idf:
+                    shared_words[w] += 1
+
+        min_shared = len(available) * 0.25
+        co_occurring = {
+            w: c for w, c in shared_words.items()
+            if c >= min_shared
+        }
+
+        if len(co_occurring) < 3:
+            continue
+
+        keyword_scores = []
+        for w, cluster_count in co_occurring.items():
+            cluster_frac = cluster_count / len(available)
+            corpus_frac = len(word_items[w]) / n_items
+            if corpus_frac > 0:
+                lift = cluster_frac / corpus_frac
+            else:
+                lift = 0
+            if lift >= 3.0:
+                keyword_scores.append((w, lift))
+
+        keyword_scores.sort(key=lambda x: -x[1])
+        topic_words = [w for w, _ in keyword_scores[:10]]
+
+        domain_words = [w for w in topic_words if len(w) >= 6]
+        if len(topic_words) < 3 or len(domain_words) < 2:
+            continue
+
+        titles = []
+        for idx in sorted(available):
+            titles.append(conversations[idx][1])
+            if len(titles) >= 5:
+                break
+
+        clusters.append({
+            "keywords": topic_words,
+            "count": len(available),
+            "sample_titles": titles,
+            "item_indices": available,
+        })
+        used_items.update(available)
+
+    # Post-filter: domain specificity
     GENERIC_SUFFIXES = {
         "ally", "tion", "ment", "ness", "lijk", "isch", "atie", "baar",
         "elen", "igen", "eren",
     }
     filtered = []
     for cluster in clusters:
-        domain_count = 0
-        for w in cluster["keywords"][:5]:
-            if len(w) >= 6 and not any(w.endswith(s) for s in GENERIC_SUFFIXES):
-                domain_count += 1
+        domain_count = sum(
+            1 for w in cluster["keywords"][:5]
+            if len(w) >= 6 and not any(w.endswith(s) for s in GENERIC_SUFFIXES)
+        )
         if domain_count >= 2:
             filtered.append(cluster)
 
-    # Merge clusters that share keywords (e.g., both about Docker/electronics)
+    # Merge overlapping clusters
     merged = []
     skip = set()
     for i, c1 in enumerate(filtered):
@@ -239,12 +409,9 @@ def discover_clusters(conversations, min_cluster_size=5):
                 continue
             kw2 = set(c2["keywords"])
             overlap = len(kw1 & kw2)
-            # Merge if they share 2+ keywords or 50%+ of the smaller cluster's keywords
             if overlap >= 2 or (overlap >= 1 and overlap / min(len(kw1), len(kw2)) >= 0.5):
-                # Merge c2 into c1
                 c1["count"] += c2["count"]
                 c1["item_indices"] = c1["item_indices"] | c2["item_indices"]
-                # Combine keywords (deduplicate, keep order)
                 for w in c2["keywords"]:
                     if w not in kw1:
                         c1["keywords"].append(w)
@@ -432,7 +599,24 @@ def main():
     ]
 
     min_cluster = seed.get("min_cluster_size", 5)
-    clusters = discover_clusters(clusterable, min_cluster_size=min_cluster)
+
+    # Check for AI-generated abstracts (from 00_abstract.py + Claude Code)
+    base_dir = os.path.dirname(args.seed) if args.seed else "."
+    abstracts_path = os.path.join(base_dir, "abstracts.json") if base_dir != "." else "abstracts.json"
+    abstracts = None
+    if os.path.exists(abstracts_path):
+        with open(abstracts_path, "r", encoding="utf-8") as f:
+            abstracts = json.load(f)
+        print(f"\nUsing AI-generated abstracts ({len(abstracts)} labels)")
+        clusters = discover_clusters_from_abstracts(
+            abstracts, clusterable, min_cluster_size=min_cluster
+        )
+    else:
+        print(f"\nNo abstracts.json found — using word-frequency fallback")
+        print(f"  (For better results, run 00_abstract.py first)")
+        clusters = discover_clusters_fallback(
+            clusterable, min_cluster_size=min_cluster
+        )
 
     if clusters:
         print(f"\nFound {len(clusters)} topic clusters:\n")
@@ -526,6 +710,7 @@ def main():
 
     # Category selection
     categories = {}
+    cluster_membership = {}  # conv_id → category (direct mapping from clustering)
     if interactive and clusters:
         print("\n" + "─" * 60)
         print("CATEGORY SELECTION")
@@ -576,18 +761,51 @@ def main():
 
     elif clusters:
         # Non-interactive: auto-accept all clusters
+        # Name categories using top 2 domain-specific keywords
+        # (ABSTRACT_GENERIC defined in discover_clusters_from_abstracts above)
+        skipped_single = []
+        cluster_membership = {}  # conv_id → category name (direct mapping)
         for cluster in clusters:
-            cat_name = cluster["keywords"][0].replace(" ", "-")
+            kws = [w for w in cluster["keywords"] if w not in ABSTRACT_GENERIC]
+            if not kws:
+                kws = cluster["keywords"]  # fallback if all filtered
+            if len(kws) < 2:
+                skipped_single.append((kws[0] if kws else "?", cluster["count"]))
+                continue
+            cat_name = f"{kws[0]}-{kws[1]}".replace(" ", "-")
             # Avoid duplicate names
             base = cat_name
             suffix = 1
             while cat_name in categories:
                 cat_name = f"{base}-{suffix}"
                 suffix += 1
+            # Extract title-based keywords from cluster members for broader matching
+            title_words = Counter()
+            strong_set = set(cluster["keywords"][:5])
+            for idx in cluster.get("item_indices", set()):
+                title = clusterable[idx][1].lower()
+                for w in tokenize(title):
+                    if (len(w) >= 3 and w not in GENERIC_WORDS
+                            and w not in ABSTRACT_GENERIC and w not in strong_set):
+                        title_words[w] += 1
+            # Use words appearing in 20%+ of cluster titles as medium keywords
+            min_title_freq = max(2, len(cluster.get("item_indices", set())) * 0.2)
+            title_kws = [w for w, c in title_words.most_common(15) if c >= min_title_freq]
+
             categories[cat_name] = {
                 "strong": cluster["keywords"][:5],
-                "medium": cluster["keywords"][5:10],
+                "medium": cluster["keywords"][5:10] + title_kws,
             }
+            # Map clustered conversation IDs directly to this category
+            for idx in cluster.get("item_indices", set()):
+                conv_id = clusterable[idx][0].get("id", "")
+                if conv_id:
+                    cluster_membership[conv_id] = cat_name
+
+        if skipped_single:
+            print(f"\n  WARNING: {len(skipped_single)} cluster(s) skipped — only 1 usable keyword:")
+            for word, count in skipped_single:
+                print(f"    '{word}' ({count} conversations) — abstracts too vague, re-run 00_abstract.py")
 
     # Ask about additional manual categories
     if interactive:
@@ -637,6 +855,15 @@ def main():
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2, ensure_ascii=False)
+
+    # Write cluster membership (direct conv_id → category mapping from discovery)
+    # This is the authoritative assignment — pipeline steps use this first,
+    # keyword matching only for conversations not in a cluster.
+    if cluster_membership:
+        membership_path = os.path.join(os.path.dirname(output_path) or ".", "cluster_membership.json")
+        with open(membership_path, "w", encoding="utf-8") as f:
+            json.dump(cluster_membership, f, indent=2, ensure_ascii=False)
+        print(f"Cluster membership: {membership_path} ({len(cluster_membership)} conversations)")
 
     # ── Summary ──────────────────────────────────────────────────────────
 

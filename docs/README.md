@@ -10,160 +10,523 @@ Turn a raw ChatGPT/OpenAI data export into structured, categorized knowledge fil
 
 You exported your ChatGPT history — now what? It's a blob of hundreds (or thousands) of conversations across years, topics, and languages. This pipeline:
 
-1. **Discovers** what topics your conversations cover (no predefined categories needed)
-2. **Categorizes** every conversation using multi-pass keyword + statistical classification
-3. **Triages** what's worth keeping vs. trivial or outdated
-4. **Extracts** valuable content per category into structured JSON
-5. Produces files ready to feed to an AI for **distillation** into reusable knowledge
+1. **Labels** each conversation with a short topic description using AI
+2. **Discovers** natural topic clusters from those labels — no predefined categories needed
+3. **Categorizes** every conversation using a three-tier system (cluster membership → abstract matching → keyword matching)
+4. **Triages** what's worth keeping vs. trivial or outdated
+5. **Extracts** valuable content per category into structured JSON
+6. **Distills** extracts into condensed knowledge files via AI
+
+---
+
+## Pipeline Architecture
+
+```
+                       ┌─────────────────────────────────────────────┐
+                       │        OpenAI Data Export                    │
+                       │    conversations-000.json ... 00N.json       │
+                       └──────────────┬──────────────────────────────┘
+                                      │
+              ┌───────────────────────┼───────────────────────┐
+              ▼                       ▼                       │
+   ┌──────────────────┐   ┌───────────────────┐              │
+   │  Step 0a          │   │  Step 0b           │              │
+   │  00_abstract.py   │   │  00_discover.py    │              │
+   │  (Claude Code)    │   │                    │              │
+   │                   │   │  Clusters labels   │              │
+   │  Generates 3-7    │──▶│  into categories,  │              │
+   │  word topic label │   │  outputs config +  │              │
+   │  per conversation │   │  membership map    │              │
+   └──────────────────┘   └────────┬───────────┘              │
+                                   │                          │
+                    config.json ───┤                          │
+                    cluster_membership.json                   │
+                                   │                          │
+              ┌────────────────────┼──────────────────────────┤
+              ▼                    ▼                          ▼
+   ┌───────────────────────────────────────────────────────────┐
+   │  Steps 1–5   (automated via run.py)                       │
+   │                                                           │
+   │  01_scan.py          Initial scan & categorize            │
+   │  02_rescan.py        Deeper re-categorization             │
+   │  03_build_checklist  Human review checklist                │
+   │  04_deep_categorize  Weighted keyword scoring              │
+   │  04b_classify.py     TF-IDF statistical classifier         │
+   │  05_extract.py       Extract content per category          │
+   └────────────────────────────┬──────────────────────────────┘
+                                │
+                    category_extracts/*.json
+                                │
+                                ▼
+   ┌───────────────────────────────────────────────────────────┐
+   │  Step 6   (Claude Code)                                    │
+   │  06_distill.py                                             │
+   │                                                           │
+   │  Condenses extracts → knowledge/learning-*.md              │
+   └───────────────────────────────────────────────────────────┘
+```
+
+### Data Flow
+
+| File | Created by | Used by | Description |
+|------|-----------|---------|-------------|
+| `excerpts.json` | `00_abstract.py --extract` | Claude Code | Title + first messages per conversation |
+| `abstracts.json` | Claude Code session | `00_discover.py`, `01`–`04` | 3-7 word topic label per conversation |
+| `cluster_membership.json` | `00_discover.py` | `01_scan`, `02_rescan`, `04_deep` | Direct conv_id → category mapping |
+| `config.json` | `00_discover.py` | All pipeline steps | Categories, keywords, triage rules |
+| `inventory.json` | `01_scan.py` | Steps `02`–`06` | One entry per conversation with category + triage |
+| `CHECKLIST.md` | `03_build_checklist.py` | Human | Markdown review checklist |
+| `category_extracts/*.json` | `05_extract.py` | `06_distill.py` / Claude Code | Conversation content grouped by category |
+| `knowledge/learning-*.md` | Claude Code (distillation) | End user / AI assistants | Final knowledge files |
 
 ---
 
 ## Quick Start
 
-### Get Your Export
+### 1. Get Your Export
 
 1. ChatGPT → Settings → Data Controls → Export Data
 2. Wait for the email, download and unzip
 3. You'll have a folder with `conversations-000.json`, `conversations-001.json`, etc.
 
-### Run Discovery (Recommended First Step)
+### 2. Create a Seed File
 
-```bash
-# Interactive — asks questions about language, reviews discovered topics
-python 00_discover.py --backup /path/to/OpenAI-Export
-
-# Non-interactive — reads answers from a seed file
-python 00_discover.py --seed seed.json --output myrun/config.json
+```json
+{
+  "backup_dir": "/path/to/OpenAI-Export",
+  "language_strategy": "unified",
+  "min_cluster_size": 3
+}
 ```
 
-This scans ALL conversations with zero configuration, detects languages, finds topic clusters, and generates a `config.json`.
-
-### Run the Pipeline
+### 3. Run the Full Pipeline
 
 ```bash
+# Step 0a: Extract excerpts, then topic-label them in Claude Code
+python 00_abstract.py --extract --config seed.json --dir myrun/
+# → Claude Code: "Process myrun/excerpts.json and generate myrun/abstracts.json"
+
+# Step 0b: Discover categories from abstracts
+python 00_discover.py --seed myrun/seed.json
+
+# Steps 1–5: Automated pipeline
 python run.py --config myrun/config.json
-```
 
-Runs steps 01 through 05 in sequence. Output lands in the same directory as your config file.
-
-### Review & Refine
-
-```bash
-# Check the generated checklist
-cat myrun/CHECKLIST.md
-
-# Optional: get keyword suggestions for remaining uncategorized items
-python 06_suggest_keywords.py --config myrun/config.json
+# Step 6: Distill in Claude Code
+python 06_distill.py --status --dir myrun/
+# → Claude Code: "Distill myrun/category_extracts/ into myrun/knowledge/"
 ```
 
 ---
 
-## Pipeline Overview
+## Three-Tier Categorization
 
-```mermaid
-flowchart TD
-    Export[("OpenAI Export<br/>conversations-*.json")]
+The pipeline assigns categories using three methods in order of reliability:
 
-    subgraph Discovery ["Step 0 — Discovery (optional)"]
-        D0["00_discover.py"]
-        D0 -->|generates| Config["config.json"]
-    end
-
-    subgraph Pipeline ["Steps 1–5 (run.py)"]
-        S1["01_scan.py<br/>Initial scan & categorize"]
-        S2["02_rescan.py<br/>Deeper re-categorization"]
-        S3["03_build_checklist.py<br/>Human review checklist"]
-        S4["04_deep_categorize.py<br/>Weighted keyword pass"]
-        S4b["04b_classify.py<br/>Statistical classifier"]
-        S5["05_extract.py<br/>Extract per category"]
-
-        S1 --> S2 --> S3 --> S4 --> S4b --> S5
-    end
-
-    subgraph Optional ["Optional"]
-        S6["06_suggest_keywords.py<br/>Keyword suggestions"]
-    end
-
-    Export --> D0
-    Export --> S1
-    Config --> S1
-
-    S1 -->|creates| Inv["inventory.json"]
-    S2 -->|updates| Inv
-    S3 -->|reads| Inv
-    S3 -->|creates| CL["CHECKLIST.md"]
-    S4 -->|updates| Inv
-    S4b -->|updates| Inv
-    S5 -->|reads| Inv
-    S5 -->|creates| Extracts["category_extracts/<br/>*.json"]
-    S6 -->|reads| Inv
-
-    Extracts -->|feed to AI| Knowledge["Knowledge files<br/>(Markdown)"]
+```
+Tier 1: Cluster Membership   (authoritative, ~99.5% accurate)
+    ↓ not found
+Tier 2: Abstract Matching     (precise, keywords against topic label)
+    ↓ no match
+Tier 3: Raw Text Matching     (broad, keywords against conversation text)
+    ↓ no match
+    → uncategorized
 ```
 
-### Data Flow
+### Tier 1 — Cluster Membership
 
-| File | Created by | Updated by | Read by |
-|------|-----------|-----------|---------|
-| `config.json` | `00_discover.py` or manual | User edits | All steps 01–06 |
-| `inventory.json` | `01_scan.py` | `02`, `04`, `04b` | `03`, `05`, `06` |
-| `CHECKLIST.md` | `03_build_checklist.py` | — | Human review |
-| `category_extracts/*.json` | `05_extract.py` | — | AI distillation |
+During discovery (step 0b), conversations are grouped into clusters based on shared words in their AI-generated topic labels. Every conversation in a cluster is directly mapped to that cluster's category via `cluster_membership.json`. This mapping is **authoritative** — steps 01, 02, and 04 never re-categorize these items.
+
+**Typical accuracy:** ~99.5%. A 1,308-conversation export yielded 608 cluster-assigned items with ~3 errors.
+
+### Tier 2 — Abstract Matching
+
+For conversations not in any cluster, the pipeline matches the conversation's topic label (from `abstracts.json`) against category keywords from `config.json`. Since topic labels are short and topically precise, a single strong keyword hit (3+ points) is sufficient.
+
+**Used in:** steps 01 and 04.
+
+### Tier 3 — Raw Text Matching
+
+For conversations without a usable topic label, the pipeline matches keywords against actual conversation content (title + user/assistant messages). Since raw text is noisy and may contain incidental keyword hits, stricter thresholds apply: **4+ distinct keyword hits** required.
+
+**Typical accuracy:** ~70%. This tier adds coverage at the cost of some false positives. In a 1,308-conversation test, it correctly categorized ~82 items but miscategorized ~35.
+
+**Used in:** steps 01, 02, and 04.
+
+### Coverage vs. Accuracy Tradeoff
+
+Tested on a 1,308-conversation export (639 qualifying with 6+ messages):
+
+| Configuration | Coverage | Accuracy | Notes |
+|--------------|----------|----------|-------|
+| Cluster-only (tier 1) | 66.8% | ~99.5% | Highest quality, lowest coverage |
+| Cluster + abstract + text (all tiers) | 76.5% | ~95% | Production default |
+| Looser text matching (min_hits=2) | 81.7% | ~93% | Higher coverage, more noise |
 
 ---
 
-## User-Facing Features
+## Step Reference
 
-### Language Detection
+### Step 0a: `00_abstract.py` — Topic Labeling
 
-The discovery step detects the language of each conversation (English, Dutch, French, German, Spanish) using function word frequency analysis.
+**Purpose:** Generate a 3-7 word topic label per conversation using AI.
 
-**Language strategy** (mandatory choice, set interactively or via config):
+**Why this exists:** ChatGPT auto-generates titles from the first message and never updates them when the conversation topic shifts. Parsing actual content produces dramatically better topic labels.
 
-| Strategy | Behavior | Requires `target_language` |
-|----------|----------|---------------------------|
-| `unified` | Auto-detects the dominant language, instructs AI to translate everything to it | No (auto-detected) |
-| `preserve` | Split output files by language (e.g., `infra-en.json`, `infra-nl.json`) | No |
-| `translate` | Single file per category, AI translates everything to a specified target language | **Yes** |
-| `multilingual` | Single file per category, AI includes both original + translation | **Yes** |
+**Modes:**
+- `--extract` — Extract excerpts from conversations → `excerpts.json`
+- `--show-prompt` — Print the topic labeling prompt for Claude Code
 
-### Topic Discovery
+**Parameters:**
 
-Categories are **discovered from your data**, not predefined. The algorithm:
+| Parameter | Default | Effect |
+|-----------|---------|--------|
+| `--config` | `seed.json` | Config with `backup_dir` |
+| `--dir` | `.` | Output directory for excerpts.json |
 
-- Tokenizes conversation content (titles + first 10 messages)
-- Computes word distinctiveness using IDF (inverse document frequency)
-- Groups conversations sharing distinctive vocabulary into clusters
-- Filters out generic function words and conversational filler
+**Logic:**
+1. Reads each conversation, extracts `id`, `title`, and first 3 user messages (300 chars each)
+2. Writes `excerpts.json` with all conversations
+3. User feeds this to Claude Code with the built-in prompt
+4. Claude Code produces `abstracts.json`: `{ "conv_id": "3-7 word topic label", ... }`
 
-A user chatting about cars gets categories like "motor/turbo/chassis". Someone into electronics gets "arduino/esp32/resistor".
+**Prompt rules for topic labels:**
+- 3-7 words, lowercase, English
+- Describe the **topic**, not the format (bad: "SSL connection error"; good: "SSL TLS certificate renewal")
+- Never end with generic action words (error, issue, setup, configuration, guide, overview)
+- Use `general-chat` for conversations with no clear single topic
 
-### Triage System
+**Batch processing:** ~50 conversations per batch. Total cost ~200K tokens for ~900 conversations.
 
-Every conversation gets a triage status:
+---
 
-| Status | Meaning | Rule |
-|--------|---------|------|
-| `skip` | Trivial, too short to contain knowledge | ≤ `skip_threshold` messages (default: 2) |
-| `skip-candidate` | Short, probably not worth processing | ≤ `skip_candidate_threshold` messages (default: 5) |
-| `review` | Worth reviewing — likely contains knowledge | 6+ messages |
-| `outdated` | Generic how-to that current AI knowledge supersedes | Matches outdated indicators + how-to signals |
-| `done` | Already processed in a previous run | Title in `already_processed` list |
+### Step 0b: `00_discover.py` — Topic Discovery
 
-### Multi-Pass Categorization
+**Purpose:** Cluster conversations by topic label similarity, generate `config.json` with categories and keywords, and output `cluster_membership.json` with direct conversation-to-category mappings.
 
-Each pass gets progressively deeper into conversation content:
+**Modes:**
+- Interactive: `--backup /path` — asks questions, reviews clusters
+- Non-interactive: `--seed seed.json` — reads answers from seed file
 
-| Pass | Script | What it reads | How it matches |
-|------|--------|--------------|----------------|
-| 1 | `01_scan.py` | Title + first user message | Simple keyword count |
-| 2 | `02_rescan.py` | Title + first 3 user messages | Keyword count with content |
-| 3 | `04_deep_categorize.py` | Title + first 5 user + 3 assistant messages | Weighted scoring (strong=3pts, medium=1pt) |
-| 4 | `04b_classify.py` | Progressive: 3→6→12→25→all messages | TF-IDF statistical profiles |
+**Parameters:**
 
-### Keyword Matching
+| Parameter | Default | Effect |
+|-----------|---------|--------|
+| `--backup` | — | Path to OpenAI export (interactive mode) |
+| `--seed` | — | Path to seed config (non-interactive mode) |
+| `--output` | `./config.json` | Where to write the generated config |
+| `min_cluster_size` | `5` (in seed) | Minimum conversations to form a cluster |
 
-Short keywords (≤4 chars) like `sso`, `ssh`, `api` use **word boundary matching** to prevent false positives inside longer words (e.g., "sso" won't match "espresso"). Longer keywords use substring matching.
+**Logic — Abstract-based clustering (when `abstracts.json` present):**
+
+1. **Tokenize labels:** Extract words from each conversation's topic label, filtering stop words, generic words, and `ABSTRACT_GENERIC` words
+2. **Build inverted index:** Map each label word → set of conversation indices
+3. **Greedy clustering:** Starting from the most frequent word:
+   - Collect all conversations containing that word
+   - If cluster size ≥ `min_cluster_size`, accept it
+   - Find co-occurring words (in ≥20% of cluster members)
+   - Mark these conversations as used
+4. **Merge clusters:** Clusters sharing 2+ keywords get combined
+5. **Enforce 2-word minimum:** Each cluster must produce at least 2 non-generic keywords for its name. If only 1, try extracting a second from member labels. If still only 1, the cluster is dropped.
+6. **Name categories:** First two non-generic keywords joined with hyphen (e.g., `docker-compose`, `excel-pivot`)
+7. **Generate keywords:** Strong keywords (first 5 from cluster) + medium keywords (next 5 from cluster + title-derived words appearing in 20%+ of cluster members)
+8. **Write `cluster_membership.json`:** Maps every clustered conversation ID directly to its category
+
+**ABSTRACT_GENERIC filter (~80 words):**
+
+Words that cannot anchor clusters or appear in category names. Prevents garbage clusters from ambiguous terms. Includes:
+- Format words: comparison, overview, guide, tutorial, troubleshooting
+- Language names: dutch, english, german, french, spanish
+- Generic nouns: system, update, code, control, service, process, management, tool, device
+- Common verbs/modifiers: design, power, smart, home, create, build, work, install, change
+
+**Fallback clustering (no abstracts):**
+- Tokenizes title + first 10 messages per conversation
+- Computes IDF per word: `log(N / (1 + doc_freq))`
+- Scores anchor candidates: `doc_freq × IDF²`
+- Co-occurrence threshold: 40% of cluster, lift ≥ 3.0x
+- Requires ≥2 domain words (length ≥6)
+
+**Key thresholds:**
+
+| Threshold | Value | Purpose |
+|-----------|-------|---------|
+| Co-occurrence (abstracts) | 20% of cluster | Capture sub-topics in diverse clusters |
+| Co-occurrence (fallback) | 40% of cluster | Tighter for noisier input |
+| Merge threshold | 2+ shared keywords | Combine overlapping clusters |
+| Min keywords for naming | 2 non-generic | Prevent ambiguous single-word categories |
+| Title keyword frequency | 20% of cluster members | Extract medium keywords from conversation titles |
+
+---
+
+### Step 01: `01_scan.py` — Initial Scan & Categorization
+
+**Purpose:** Parse all conversations, build `inventory.json` with initial category and triage assignments.
+
+**Parameters:**
+
+| Parameter | Default | Effect |
+|-----------|---------|--------|
+| `--config` | `config.json` | Path to config file |
+
+**Inputs:** `config.json`, `cluster_membership.json`, `abstracts.json`, raw conversations
+**Output:** `inventory.json`
+
+**Logic:**
+
+For each conversation:
+1. Extract metadata: title, date, message count, language, first user message, custom GPT flag
+2. **Categorize** using the three-tier system:
+   - If title in `already_processed` → category `already-processed`, triage `done`
+   - If conversation ID in `cluster_membership.json` → use that category (tier 1)
+   - Else: keyword match against abstract text or raw text (tiers 2/3), `min_score=2`
+3. **Triage:**
+   - `msg_count ≤ skip_threshold` → `skip`
+   - `msg_count ≤ skip_candidate_threshold` → `skip-candidate`
+   - Otherwise → `review`
+4. **Outdated check:** If triage is `review` or `skip-candidate`, check against `outdated_indicators` + `howto_signals`
+
+**What it reads per conversation:** Title + first user message (500 chars)
+
+**Categorization function (`categorize`):**
+- Supports both `{strong, medium}` keyword dicts and flat lists
+- At this stage, all keywords score 1 point each (no weighting)
+- `min_score` parameter controls minimum hits required (default: 2)
+
+**Inventory entry structure:**
+```json
+{
+  "id": "conversation-uuid",
+  "title": "ESP32 LED Setup",
+  "date": "2024-03-15",
+  "message_count": 12,
+  "language": "en",
+  "category": "esp32-board",
+  "triage": "review",
+  "outdated_reason": null,
+  "first_user_preview": "How do I connect...",
+  "custom_gpt": false
+}
+```
+
+---
+
+### Step 02: `02_rescan.py` — Deeper Re-categorization
+
+**Purpose:** Improve categorization by reading actual conversation content, not just titles.
+
+**Parameters:**
+
+| Parameter | Default | Effect |
+|-----------|---------|--------|
+| `--config` | `config.json` | Path to config file |
+
+**Inputs:** `inventory.json`, `config.json`, `cluster_membership.json`, `abstracts.json`, raw conversations
+**Output:** Updated `inventory.json`
+
+**Logic:**
+
+For each conversation (except `triage=done` and cluster-assigned items):
+1. Build search text: prefer abstract over raw content
+   - If abstract exists: `title + abstract` (more precise)
+   - Else: `title + first 3 user messages` (noisier)
+2. Re-categorize with `min_score=2`
+3. **Outdated detection (two rules):**
+   - Matches `outdated_indicators` + `howto_signals` → outdated
+   - Date < cutoff AND ≤10 messages AND matches generic Q&A patterns ("what is", "explain", "how to", "difference between") + tech keywords → outdated
+
+**Key difference from step 01:** Reads 3 user messages instead of just the first. Can change an existing category if a better match is found (except cluster-assigned items, which are never touched).
+
+---
+
+### Step 03: `03_build_checklist.py` — Review Checklist
+
+**Purpose:** Generate a human-readable Markdown checklist for manual review.
+
+**Input:** `inventory.json`
+**Output:** `CHECKLIST.md`
+
+**Format:** Grouped by category, then triage status:
+- `[x]` — done/outdated (no action needed)
+- `[ ]` — review/skip-candidate (needs human review)
+- `[-]` — skip (trivial)
+
+Includes summary tables with category and triage distribution counts.
+
+---
+
+### Step 04: `04_deep_categorize.py` — Weighted Keyword Scoring
+
+**Purpose:** Categorize remaining uncategorized items using weighted scoring on deeper content analysis.
+
+**Parameters:**
+
+| Parameter | Default | Effect |
+|-----------|---------|--------|
+| `--config` | `config.json` | Path to config file |
+
+**Inputs:** `inventory.json`, `config.json`, `cluster_membership.json`, `abstracts.json`, raw conversations
+**Output:** Updated `inventory.json`
+
+**Logic:**
+
+For each uncategorized conversation (skipping cluster-assigned items):
+1. **Try abstract matching first** (tier 2):
+   - Search text: `title + abstract`
+   - Scoring: strong keywords = 3 points, medium = 1 point
+   - Threshold: `min_confidence=3`, `min_hits=1`
+   - Rationale: abstracts are precise enough that 1 strong keyword hit is reliable
+
+2. **Fall back to raw text matching** (tier 3):
+   - Search text: title + first 5 user messages (500 chars each) + first 3 assistant messages (300 chars each)
+   - Scoring: strong keywords = 3 points, medium = 1 point
+   - Threshold: `min_confidence=4`, `min_hits=4`
+   - Rationale: raw text is noisy; requiring 4+ distinct keyword hits reduces false positives
+
+3. **Additional outdated detection** on newly categorized tech items
+
+**Scoring function (`score_categories`):**
+
+| Parameter | Value | Purpose |
+|-----------|-------|---------|
+| `min_confidence` | 3 (abstract) / 4 (text) | Minimum weighted score to assign |
+| `min_hits` | 1 (abstract) / 4 (text) | Minimum distinct keyword matches |
+| Strong weight | 3 points | Domain-specific keywords |
+| Medium weight | 1 point | Supporting keywords |
+
+**Why two thresholds:** A single strong keyword like "docker" in raw text would score 3 points — enough to categorize with just `min_confidence=3`. But "docker" might appear incidentally in any conversation about software. Requiring `min_hits=4` ensures the conversation actually discusses the category topic in depth.
+
+---
+
+### Step 04b: `04b_classify.py` — Statistical Classifier
+
+**Purpose:** Classify remaining uncategorized conversations using TF-IDF statistical profiles built from already-categorized items.
+
+**Inputs:** `inventory.json`, `config.json`, raw conversations
+**Output:** Updated `inventory.json`
+
+**Logic:**
+
+1. Build TF-IDF vocabulary from all categorized conversations
+2. Build per-category statistical profiles (top 500 distinctive features per category)
+3. For each uncategorized item, read messages progressively (3 → 6 → 12 → 25 → all)
+4. Score against all category profiles using cosine-like similarity
+5. Assign if three gates pass:
+
+| Gate | Threshold | Purpose |
+|------|-----------|---------|
+| Relative margin | Top score > #2 by 10-15% | Prevents ambiguous assignments |
+| Absolute score | ≥40% of category average | Prevents weak matches |
+| Keyword anchor | ≥1 config keyword OR ≥3 of top 20 profile features | Prevents noise-driven misclassification |
+
+**Key thresholds:**
+
+| Parameter | Value | Purpose |
+|-----------|-------|---------|
+| `MIN_TRAINING_DOCS` | 20 | Categories need enough data for reliable profiles |
+| Distinctiveness | 2.0x | Profile words must appear 2x more in category than elsewhere |
+| Progressive batches | 3, 6, 12, 25, all | Read more messages until confident |
+| Message truncation | 1000 chars | Per-message limit |
+
+---
+
+### Step 05: `05_extract.py` — Content Extraction
+
+**Purpose:** Extract valuable content from each category into structured JSON files for AI distillation.
+
+**Input:** `inventory.json`, raw conversations
+**Output:** `category_extracts/<category>.json`
+
+**Logic:**
+
+For each conversation with `triage ∉ {skip, outdated, done}`:
+- Extract first 3 user messages (1000 chars each)
+- Extract first 2 assistant responses (1000 chars each)
+- For longer chats (6+ messages): include last user message (500 chars) for context
+- Include metadata: title, date, message count, triage, custom GPT flag
+
+Each extract file contains a `_meta` header with language strategy and target language (from config), so the distillation step knows what language to write in.
+
+---
+
+### Step 06: `06_distill.py` — Knowledge Distillation
+
+**Purpose:** Condense category extracts into structured knowledge files.
+
+**This is a manual step requiring a Claude Code session.**
+
+**Modes:**
+- `--status` — Show distillation progress (pending/done per category)
+- `--show-prompt` — Print the distillation prompt
+
+**Parameters:**
+
+| Parameter | Default | Effect |
+|-----------|---------|--------|
+| `--dir` | `.` | Run directory containing `category_extracts/` |
+
+**Workflow:**
+1. `python 06_distill.py --status --dir myrun/` — see what needs distilling
+2. In Claude Code: "Distill myrun/category_extracts/ into knowledge files in myrun/knowledge/"
+3. Claude reads each extract, condenses conversations, writes one `learning-[category]-[date].md`
+4. `python 06_distill.py --status --dir myrun/` — verify completeness
+
+**Output format:** `knowledge/learning-[category]-yyyymmdd.md`
+
+**Distillation rules (from the built-in PROMPT):**
+- Extract **knowledge**, not conversation — strip greetings, back-and-forth, noise
+- **Deduplicate** across conversations covering the same ground
+- Organize by **sub-topic** with clear markdown headers
+- Preserve **specifics**: exact commands, config values, URLs, model numbers, version numbers
+- **Flag contradictions** when conversations contain conflicting information
+- Skip trivial `skip-candidate` conversations with no real knowledge
+- Write in the language specified by the extract's `_meta` header
+
+**Language handling:** Translation happens at distillation time, not extraction. The `_meta` header tells Claude Code which language to produce.
+
+---
+
+### `06_suggest_keywords.py` — Keyword Suggestions (Optional)
+
+**Purpose:** Analyze uncategorized conversations and suggest keywords to improve coverage.
+
+**Parameters:**
+
+| Parameter | Default | Effect |
+|-----------|---------|--------|
+| `--config` | `config.json` | Path to config file |
+| `--top` | `30` | Number of suggestions per type |
+
+**Three suggestion types:**
+1. **Frequent words** in uncategorized items (≥3 occurrences) not already in config
+2. **Frequent bigrams** (word pairs, ≥2 occurrences) not already in config
+3. **Category-specific candidates** — words distinctive to an existing category that also appear frequently in uncategorized items
+
+---
+
+## Shared Utilities (`shared.py`)
+
+### `keyword_in_text(keyword, text)`
+
+Word-boundary-aware keyword matching.
+
+- **Single-word keywords** (any length): use regex `(?<![a-z])keyword(?![a-z])` — prevents "compose" matching "composers", "design" matching "designated", "sso" matching "espresso"
+- **Multi-word phrases**: use substring matching — phrases like "raspberry pi" or "power bi" are inherently specific
+
+### `detect_language(text)`
+
+Language detection via function word frequency. Counts matches against `LANG_MARKERS` (en/nl/fr/de/es, ~30-50 markers each). Returns ISO code if ≥3 hits, else `"unknown"`. Requires ≥10 words in input.
+
+### `tokenize(text)`
+
+Splits text into lowercase tokens ≥3 characters, filtering stop words. Regex: `[a-z\u00e0-\u024f][a-z\u00e0-\u024f0-9]{2,}`.
+
+### Word lists
+
+| List | Size | Purpose |
+|------|------|---------|
+| `STOP_WORDS` | ~400 | Function words in en/nl/fr filtered during tokenization |
+| `GENERIC_WORDS` | ~500 | Too generic to define a topic (adjectives, verbs, ChatGPT artifacts) |
 
 ---
 
@@ -176,359 +539,84 @@ Short keywords (≤4 chars) like `sso`, `ssh`, `api` use **word boundary matchin
   // Path to unzipped OpenAI data export
   "backup_dir": "/path/to/OpenAI-Export",
 
-  // Language handling for output files (required)
-  // Options: "unified" | "preserve" | "translate" | "multilingual"
-  "language_strategy": "translate",
+  // Language handling for output files
+  "language_strategy": "unified",   // unified|preserve|translate|multilingual
 
-  // Target language when strategy is "translate" or "multilingual"
-  // ISO 639-1: "en", "nl", "de", "fr", "es"
-  "target_language": "en",
+  // Target language (required for translate/multilingual; auto-detected for unified)
+  "target_language": "nl",
 
-  // Topic categories with keywords
-  // Can be auto-generated by 00_discover.py or hand-crafted
+  // Categories with keywords — auto-generated by 00_discover.py
   "categories": {
-    "infrastructure": {
-      "strong": ["docker", "traefik", "kubernetes"],  // 3 points each
-      "medium": ["server", "linux", "deploy"]          // 1 point each
+    "docker-compose": {
+      "strong": ["docker", "compose"],          // 3 points each in weighted scoring
+      "medium": ["vps", "container", "traefik"]  // 1 point each
     },
-    "cooking": ["recipe", "oven", "ingredients"]       // flat list (1pt each)
+    "recipe-calorie": {
+      "strong": ["recipe", "calorie", "muffin"],
+      "medium": ["baking", "ingredients"]
+    }
   },
 
   // Triage rules
   "triage": {
-    "skip_threshold": 2,              // messages ≤ this → triage "skip"
-    "skip_candidate_threshold": 5,    // messages ≤ this → triage "skip-candidate"
-    "outdated_before": "2024-06-01",  // date cutoff for outdated detection
-    "outdated_indicators": {          // keyword → reason label
-      "docker": "Docker setup",
-      "nginx": "Nginx config"
-    },
-    "howto_signals": [                // if indicator + signal → "outdated"
-      "how to", "setup", "install", "configure"
-    ]
-  },
-
-  // Conversation titles already distilled in a previous run
-  "already_processed": ["Some Chat Title", "Another One"]
-}
-```
-
-### Seed Config (`seed.json`) — for Non-Interactive Discovery
-
-Minimal file to drive `00_discover.py` without interactive prompts:
-
-```jsonc
-{
-  "backup_dir": "/path/to/OpenAI-Export",  // required
-  "language_strategy": "translate",         // required: unified|preserve|translate|multilingual
-  "target_language": "en",                 // required when strategy is translate or multilingual
-  "min_cluster_size": 8,                   // optional, default: 5
-  "triage": {                              // optional, default: sensible defaults
     "skip_threshold": 2,
     "skip_candidate_threshold": 5,
-    "outdated_before": "2024-06-01"
-  }
+    "outdated_before": "2024-06-01",
+    "outdated_indicators": { "docker": "Docker setup" },
+    "howto_signals": ["how to", "setup", "install"]
+  },
+
+  // Titles already distilled in a previous run
+  "already_processed": ["Some Chat Title"]
 }
 ```
 
-### Config Parameters Quick Reference
+### Seed Config (`seed.json`)
 
-| Parameter | Where | Default | Effect |
-|-----------|-------|---------|--------|
-| `backup_dir` | config/seed | — | Path to OpenAI export (conversations-*.json) |
-| `language_strategy` | config/seed | **required** | unified, preserve, translate, or multilingual |
-| `target_language` | config/seed | — | ISO 639-1 code (required for translate/multilingual) |
-| `min_cluster_size` | seed | `5` | Minimum conversations to form a topic cluster |
-| `skip_threshold` | triage | `2` | Messages ≤ this → skip |
-| `skip_candidate_threshold` | triage | `5` | Messages ≤ this → skip-candidate |
-| `outdated_before` | triage | `"2024-06-01"` | Date cutoff for outdated generic how-to |
-| `already_processed` | config | `[]` | Conversation titles to mark as done |
-
----
-
-## Script Details
-
-### `00_discover.py` — Topic Discovery
-
-**Purpose:** Scan raw export, detect languages, discover topic clusters, generate config.
-
-**Modes:**
-- Interactive: `--backup /path` — asks questions, shows clusters for review
-- Config-driven: `--seed seed.json` — reads answers from seed file
-
-**Phases:**
-
-```mermaid
-flowchart LR
-    A["Load conversations"] --> B["Detect language<br/>per conversation"]
-    B --> C["Tokenize &<br/>compute IDF"]
-    C --> D["Greedy clustering<br/>by distinctive words"]
-    D --> E["Post-filter &<br/>merge clusters"]
-    E --> F["User choices<br/>(or seed defaults)"]
-    F --> G["Write config.json"]
-```
-
-**Internal Parameters & Thresholds:**
-
-| Parameter | Value | Purpose |
-|-----------|-------|---------|
-| Max corpus frequency | 5% of conversations | Words in >5% of conversations are too generic to cluster on |
-| Lift threshold | 3.0x | A keyword must appear 3x more in its cluster than in the corpus |
-| Min keywords per cluster | 3 total, 2 with length ≥6 | Ensures clusters have domain-specific terms |
-| Domain word min length | 6 characters | Short words tend to be function words |
-| Cluster merge threshold | 2+ shared keywords | Merges overlapping clusters |
-| Min words for language detection | 10 | Below this, language is "unknown" |
-| Min language marker hits | 3 | Need ≥3 function word matches to assign language |
-| Messages read per conversation | 10 (800 chars each) | Balance between coverage and speed |
-
-**Language Detection Method:**
-Counts matches against known function word sets per language (LANG_MARKERS). Each language has ~30-50 marker words (e.g., English: "the", "was", "which", "through"; Dutch: "een", "het", "niet", "eigenlijk"). Highest match count wins if ≥3 hits.
-
-**Clustering Algorithm:**
-1. Build word sets per conversation (tokenize, filter stop words + generic words, min 4 chars)
-2. Compute IDF per word: `log(N / (1 + doc_freq))`
-3. Score anchor candidates: `doc_freq × IDF²` (balances frequency with distinctiveness)
-4. Greedy: take highest-scoring anchor word, find all conversations containing it
-5. For each cluster: find co-occurring words (in ≥40% of cluster items)
-6. Rank by lift: `(fraction_in_cluster / fraction_in_corpus)`, keep words with lift ≥3.0
-7. Post-filter: require ≥2 domain words (length ≥6, no generic suffixes)
-8. Merge: clusters sharing ≥2 keywords get combined
-
-**Interactive Mode Features:**
-- Shows all discovered clusters with sample titles
-- For each cluster: accept (give it a name), skip, or merge with another cluster number
-- Add manual categories after discovery
-- Choose language strategy and target language
-
----
-
-### `01_scan.py` — Initial Scan & Categorization
-
-**Purpose:** Parse all conversations, build the inventory, assign initial categories and triage.
-
-**Input:** `config.json` (categories, triage rules, already_processed)
-**Output:** `inventory.json` (one entry per conversation)
-
-**What it reads per conversation:** Title + first user message (500 chars)
-
-**Categorization:** Simple keyword count — category with most keyword hits wins. Supports both `{strong, medium}` keyword dicts and flat keyword lists (both score 1 point per hit at this stage).
-
-**Triage rules applied:**
-- `msg_count ≤ skip_threshold` → `skip`
-- `msg_count ≤ skip_candidate_threshold` → `skip-candidate`
-- Title in `already_processed` → `done`
-- Matches `outdated_indicators` + `howto_signals` → `outdated`
-- Otherwise → `review`
-
-**Custom GPT detection:** Flags conversations that had a system message >100 characters (indicates Custom GPT usage).
-
-**Inventory entry structure:**
-```json
-{
-  "id": "conversation-uuid",
-  "title": "ESP32 LED Setup",
-  "date": "2024-03-15",
-  "message_count": 12,
-  "category": "hardware",
-  "triage": "review",
-  "outdated_reason": null,
-  "first_user_preview": "How do I connect...",
-  "custom_gpt": false
-}
-```
-
----
-
-### `02_rescan.py` — Deeper Re-categorization
-
-**Purpose:** Improve categorization by reading actual conversation content, not just titles.
-
-**Input:** `inventory.json`, `config.json`, raw conversations
-**Output:** Updated `inventory.json`
-
-**What it reads:** Title + first 3 user messages (full text)
-
-**Differences from step 01:**
-- Reads 3 user messages instead of just the first
-- Re-categorizes ALL items (not just uncategorized), except `triage=done`
-- Can change an existing category if a better match is found
-- Additional outdated detection: old generic tech Q&A (date < cutoff, ≤10 messages, matches generic patterns like "what is", "explain", "difference between")
-
-**Outdated detection rules:**
-1. `triage ∈ {review, skip-candidate}` AND matches `outdated_indicators` + `howto_signals` → outdated
-2. `triage ∈ {review, skip-candidate}` AND `date < outdated_before` AND `msg_count ≤ 10` AND matches generic Q&A patterns + tech keywords → outdated
-
----
-
-### `03_build_checklist.py` — Review Checklist
-
-**Purpose:** Generate a human-readable Markdown checklist for manual review.
-
-**Input:** `inventory.json`
-**Output:** `CHECKLIST.md`
-
-**Format:** Grouped by category, then by triage status. Uses checkbox notation:
-- `[x]` — done/outdated (no action needed)
-- `[ ]` — review/skip-candidate (needs human review)
-- `[-]` — skip (trivial)
-
-Includes summary tables with category and triage distribution counts.
-
----
-
-### `04_deep_categorize.py` — Weighted Keyword Pass
-
-**Purpose:** Categorize remaining uncategorized items using weighted scoring on deeper content.
-
-**Input:** `inventory.json`, `config.json`, raw conversations
-**Output:** Updated `inventory.json`
-
-**What it reads:** Title + first 5 user messages (500 chars each) + first 3 assistant messages (300 chars each)
-
-**Scoring:** Weighted keyword matching:
-- `strong` keywords: **3 points** each
-- `medium` keywords: **1 point** each
-- Minimum confidence: **2 points** to assign a category
-
-**Additional outdated detection:** Same as step 02 but applied to newly categorized items in tech categories (`infrastructure`, `development`, `networking`, `hardware`).
-
----
-
-### `04b_classify.py` — Statistical Classifier
-
-**Purpose:** Classify remaining uncategorized conversations using TF-IDF statistical profiles built from already-categorized items.
-
-**Input:** `inventory.json`, `config.json`, raw conversations
-**Output:** Updated `inventory.json`
-
-**This is the most sophisticated classification step.** It uses the output of steps 01–04 as training data.
-
-**Algorithm:**
-
-```mermaid
-flowchart TD
-    A["Build TF-IDF profiles<br/>from categorized items"] --> B["For each uncategorized item"]
-    B --> C["Read messages progressively<br/>3 → 6 → 12 → 25 → all"]
-    C --> D["Score against all profiles<br/>(cosine-like similarity)"]
-    D --> E{"Margin > threshold<br/>AND score > avg × ratio<br/>AND keyword anchor?"}
-    E -->|Yes| F["Assign category"]
-    E -->|No| G["Read more messages<br/>or give up"]
-```
-
-**Internal Parameters & Thresholds:**
-
-| Parameter | Value | Purpose |
-|-----------|-------|---------|
-| `MIN_TRAINING_DOCS` | 20 | Categories with fewer items don't get statistical profiles |
-| `min_confidence` | 0.10–0.15 | Minimum margin between #1 and #2 scores |
-| `min_score_ratio` | 0.4 | Top score must be ≥40% of average for that category |
-| Distinctiveness threshold | 2.0x | Profile words must appear 2x more in category than others |
-| Top profile features | 500 per category | Max vocabulary size per category profile |
-| Progressive batches | 3, 6, 12, 25, all | Message reading stages |
-| Message truncation | 1000 chars | Per-message limit during scoring |
-| Keyword anchor required | Yes | At least 1 config keyword OR 3 of top 20 profile features |
-
-**Three-gate classification:**
-1. **Relative margin:** Top score must be sufficiently ahead of #2 (prevents ambiguous assignments)
-2. **Absolute score:** Must reach ≥40% of what typical items in that category score (prevents weak matches)
-3. **Keyword anchor:** At least one config keyword must appear, OR 3+ of the top 20 statistical features (prevents noise-driven misclassification)
-
-**Post-classification:** Runs `discover_categories()` on remaining uncategorized items — reports potential new category clusters the user could add to their config.
-
----
-
-### `05_extract.py` — Content Extraction
-
-**Purpose:** Extract the valuable content from each category into structured JSON files for AI distillation.
-
-**Input:** `inventory.json`, raw conversations
-**Output:** `category_extracts/<category>.json`
-
-**What it extracts per conversation:**
-- First 3 user messages (1000 chars each)
-- First 2 assistant responses (1000 chars each)
-- Last user message for context in longer chats (500 chars, only if 6+ messages)
-- Metadata: title, date, message count, triage status, custom GPT flag
-
-**Filter:** Only processes items with `triage ∉ {skip, outdated, done}`.
-
-Also generates `uncategorized.json` with remaining uncategorized items (first 2 user messages, 800 chars each).
-
----
-
-### `06_suggest_keywords.py` — Keyword Suggestions (Optional)
-
-**Purpose:** Analyze uncategorized conversations and suggest keywords to add to your config for better coverage.
-
-**Input:** `inventory.json`, `config.json`, raw conversations
-**Output:** Console output with suggestions
-
-**Three types of suggestions:**
-1. **Frequent words** in uncategorized items (≥3 occurrences) not already in config
-2. **Frequent bigrams** (word pairs, ≥2 occurrences) not already in config
-3. **Category-specific candidates** — words that are distinctive to an existing category AND appear frequently in uncategorized items (useful for expanding existing category coverage)
-
-**Parameters:**
-- `--top N` — number of suggestions per type (default: 30)
-- Distinctiveness threshold: word must appear in >10% of a category's docs AND >2x more than in other categories
-
----
-
-### `shared.py` — Shared Utilities
-
-Contains three components used across all pipeline scripts:
-
-1. **`keyword_in_text(keyword, text)`** — Word-boundary-aware keyword matching. Short keywords (≤4 chars) use regex `(?<![a-z])keyword(?![a-z])` to prevent false positives like "sso" matching in "espresso".
-
-2. **`STOP_WORDS`** (~400 words) — Function words in English, Dutch, and French that are filtered during tokenization.
-
-3. **`GENERIC_WORDS`** (~500 words) — Words that pass stop word filtering but are too generic to define a topic. Includes Dutch/English adjectives, verbs, conversational filler, and ChatGPT search artifacts (`turn0search*`).
-
-4. **`detect_language(text)`** — Language detection via function word frequency. Counts matches against `LANG_MARKERS` (en/nl/fr/de/es, ~30-50 markers each). Returns ISO code if ≥3 hits, else `"unknown"`.
-
-5. **`LANG_MARKERS`** / **`LANG_NAMES`** — Function word sets and display names per language.
-
-6. **`tokenize(text)`** — Splits text into lowercase tokens ≥3 characters, filtering stop words. Regex: `[a-z\u00e0-\u024f][a-z\u00e0-\u024f0-9]{2,}`.
-
----
-
-### `run.py` — Pipeline Orchestrator
-
-Runs steps 01–05 in sequence. Validates config before starting. Reports timing per step.
-
-```bash
-python run.py --config path/to/config.json
-```
-
-If any step fails (non-zero exit code), the pipeline stops with an error. Each step's stdout/stderr is captured and displayed with indentation.
-
----
-
-## Verified Language Strategy Results
-
-Tested against a 1,308-conversation OpenAI export (mixed English/Dutch):
-
-| Testrun | Strategy | Target Language | Extract Files | Notes |
-|---------|----------|----------------|---------------|-------|
-| testrun1 | `preserve` | — | 101 | Files split by language: `arduino-en.json`, `arduino-nl.json`, etc. |
-| testrun2 | `unified` | auto → `nl` | 43 | Auto-detected Dutch as dominant; single file per category with translate instruction |
-| testrun3 | `translate` | `de` (German) | 38 | Single file per category with `_meta` instructing translation to German |
-
-**Extract file `_meta` header examples:**
+Minimal file for non-interactive discovery:
 
 ```jsonc
-// unified (testrun2) — auto-detected nl
-{"language_strategy": "unified", "target_language": "nl",
- "instruction": "Translate all content to nl during distillation..."}
-
-// translate (testrun3) — forced de
-{"language_strategy": "translate", "target_language": "de",
- "instruction": "Translate all content to de during distillation..."}
-
-// preserve (testrun1) — per-language files
-{"language_strategy": "preserve", "language": "en",
- "instruction": "Content is in en. Preserve the original language."}
+{
+  "backup_dir": "/path/to/OpenAI-Export",     // required
+  "language_strategy": "unified",             // required
+  "target_language": "en",                    // required for translate/multilingual
+  "min_cluster_size": 3                       // optional, default: 5
+}
 ```
+
+### Language Strategies
+
+| Strategy | Behavior | Requires `target_language` |
+|----------|----------|---------------------------|
+| `unified` | Auto-detect dominant language, translate everything to it | No (auto-detected) |
+| `preserve` | Split output files by language (e.g., `infra-en.json`, `infra-nl.json`) | No |
+| `translate` | Translate everything to specified target language | **Yes** |
+| `multilingual` | Include both original + translated content | **Yes** |
+
+### All Parameters
+
+| Parameter | Location | Default | Effect |
+|-----------|----------|---------|--------|
+| `backup_dir` | config/seed | — | Path to OpenAI export |
+| `language_strategy` | config/seed | **required** | Language handling mode |
+| `target_language` | config/seed | auto-detected | ISO 639-1 target language |
+| `min_cluster_size` | seed | `5` | Minimum conversations per cluster |
+| `skip_threshold` | triage | `2` | Messages ≤ this → triage `skip` |
+| `skip_candidate_threshold` | triage | `5` | Messages ≤ this → `skip-candidate` |
+| `outdated_before` | triage | `2024-06-01` | Date cutoff for outdated detection |
+| `already_processed` | config | `[]` | Titles to mark as `done` |
+
+---
+
+## Triage System
+
+| Status | Meaning | Rule |
+|--------|---------|------|
+| `skip` | Too short to contain knowledge | ≤ `skip_threshold` messages (default: 2) |
+| `skip-candidate` | Short, probably not worth processing | ≤ `skip_candidate_threshold` messages (default: 5) |
+| `review` | Likely contains knowledge | 6+ messages |
+| `outdated` | Generic how-to that current AI supersedes | Matches outdated indicators + how-to signals |
+| `done` | Already processed in a previous run | Title in `already_processed` |
 
 ---
 
@@ -536,77 +624,103 @@ Tested against a 1,308-conversation OpenAI export (mixed English/Dutch):
 
 ```
 AIKnowledgeDistill/
-├── 00_discover.py          # Topic discovery (run first or skip)
-├── 01_scan.py              # Initial scan
-├── 02_rescan.py            # Deeper categorization
-├── 03_build_checklist.py   # Review checklist
-├── 04_deep_categorize.py   # Weighted keyword pass
-├── 04b_classify.py         # Statistical classifier
-├── 05_extract.py           # Content extraction
-├── 06_suggest_keywords.py  # Keyword suggestions (optional)
-├── run.py                  # Pipeline orchestrator
+├── 00_abstract.py          # Step 0a: Topic labeling (Claude Code)
+├── 00_discover.py          # Step 0b: Topic discovery & config generation
+├── 01_scan.py              # Step 1: Initial scan & categorize
+├── 02_rescan.py            # Step 2: Deeper re-categorization
+├── 03_build_checklist.py   # Step 3: Human review checklist
+├── 04_deep_categorize.py   # Step 4: Weighted keyword scoring
+├── 04b_classify.py         # Step 4b: TF-IDF statistical classifier
+├── 05_extract.py           # Step 5: Content extraction
+├── 06_distill.py           # Step 6: Knowledge distillation (Claude Code)
+├── 06_suggest_keywords.py  # Optional: keyword suggestions
+├── run.py                  # Pipeline orchestrator (steps 1–5)
 ├── shared.py               # Shared utilities
-├── config.example.json     # Template config with example categories
-├── CLAUDE.md               # AI assistant instructions
 ├── docs/
 │   └── README.md           # This file
-├── testrun1/               # preserve strategy
-│   ├── seed.json            # language_strategy: "preserve"
-│   ├── config.json          # Generated config
-│   ├── inventory.json       # Generated inventory
-│   ├── CHECKLIST.md         # Generated checklist
-│   └── category_extracts/   # Split by language
-│       ├── arduino-en.json
-│       ├── arduino-nl.json
-│       └── ...
-├── testrun2/               # unified strategy (auto-detect)
-│   ├── seed.json            # language_strategy: "unified"
-│   └── category_extracts/   # Single file per category
-│       ├── arduino.json     # _meta: target_language "nl"
-│       └── ...
-└── testrun3/               # translate strategy
-    ├── seed.json            # language_strategy: "translate", target: "de"
-    └── category_extracts/   # Single file per category
-        ├── arduino.json     # _meta: target_language "de"
+└── testrun5/               # Example run
+    ├── seed.json
+    ├── abstracts.json       # 919 topic labels
+    ├── cluster_membership.json  # 608 direct assignments
+    ├── config.json          # 92 categories
+    ├── inventory.json       # 1308 conversations
+    ├── CHECKLIST.md
+    ├── category_extracts/   # 126 extract files
+    └── knowledge/           # Distilled knowledge files
+        ├── learning-docker-compose-20260308.md
         └── ...
 ```
 
+---
+
 ## Typical Workflows
 
-### First Time — Interactive Discovery
+### Full Pipeline (Recommended)
 
 ```bash
-python 00_discover.py --backup ~/Downloads/OpenAI-Export
-# Review and name discovered categories
-# Generates config.json
+mkdir myrun
 
+# Step 0a: Generate topic labels
+python 00_abstract.py --extract --config seed.json --dir myrun/
+# → In Claude Code: "Process myrun/excerpts.json → myrun/abstracts.json"
+
+# Step 0b: Discover categories
+python 00_discover.py --seed myrun/seed.json
+
+# Steps 1–5: Automated
+python run.py --config myrun/config.json
+
+# Step 6: Distill
+python 06_distill.py --status --dir myrun/
+# → In Claude Code: "Distill myrun/category_extracts/ → myrun/knowledge/"
+
+# Verify
+python 06_distill.py --status --dir myrun/
+```
+
+### Quick Start — No Claude Code
+
+```bash
+# Uses fallback word-frequency clustering (lower quality but fully automated)
+python 00_discover.py --seed seed.json
 python run.py --config config.json
-# Review CHECKLIST.md, fix miscategorizations
-# Feed category_extracts/*.json to AI for distillation
 ```
 
-### First Time — Manual Config
+### Iterative Improvement
 
 ```bash
-cp config.example.json myrun/config.json
-# Edit: set backup_dir, adjust categories to your interests
-
-python run.py --config myrun/config.json
-```
-
-### Re-run After Adding Keywords
-
-```bash
+# Check what's still uncategorized
 python 06_suggest_keywords.py --config myrun/config.json
-# Add suggested keywords to config
 
-python run.py --config myrun/config.json
-# Pipeline re-runs all steps, improving categorization
-```
-
-### Non-Interactive (Scripted/CI)
-
-```bash
-python 00_discover.py --seed seed.json --output myrun/config.json
+# Add keywords to config, re-run
 python run.py --config myrun/config.json
 ```
+
+---
+
+## Tested Results
+
+Validated against a 1,308-conversation ChatGPT export (April 2023 — March 2026, mixed English/Dutch):
+
+| Metric | Value |
+|--------|-------|
+| Total conversations | 1,308 |
+| Qualifying (6+ messages) | 639 |
+| Cluster-assigned | 608 (92 categories) |
+| Coverage (qualifying) | 76.5% |
+| Overall accuracy | ~95% |
+| Categories produced | 92 |
+| Distillable categories (3+ qualifying) | 77 |
+| Knowledge files produced | 77 |
+
+### Quality by Tier
+
+| Tier | Items | Accuracy | Notes |
+|------|-------|----------|-------|
+| Cluster membership | 608 | ~99.5% | 3 errors (topic label ambiguity) |
+| Keyword matching | 117 | ~70% | 35 errors (incidental keyword hits) |
+| **Overall** | **725** | **~95%** | Cluster quality drives the aggregate |
+
+### Remaining Uncategorized
+
+The ~120 uncategorized qualifying conversations are genuinely unique one-off topics (biometrics, fridge repair, perfume shopping, etc.) that don't cluster with anything. ~20 of these have `general-chat` as their topic label, meaning even AI couldn't identify a clear topic.

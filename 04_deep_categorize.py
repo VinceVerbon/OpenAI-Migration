@@ -58,7 +58,7 @@ def extract_analysis_text(conv, title, max_user=5, max_asst=3):
     return " ".join(parts).lower()
 
 
-def score_categories(search_text, categories, min_confidence=2):
+def score_categories(search_text, categories, min_confidence=2, min_hits=2):
     """Weighted scoring: strong keywords = 3 points, medium = 1 point."""
     scores = {}
     for cat, keywords in categories.items():
@@ -71,8 +71,9 @@ def score_categories(search_text, categories, min_confidence=2):
 
         strong_hits = sum(1 for kw in strong if keyword_in_text(kw, search_text))
         medium_hits = sum(1 for kw in medium if keyword_in_text(kw, search_text))
+        total_hits = strong_hits + medium_hits
         score = strong_hits * 3 + medium_hits
-        if score >= min_confidence:
+        if total_hits >= min_hits and score >= min_confidence:
             scores[cat] = score
 
     if scores:
@@ -96,6 +97,21 @@ def main():
     with open(inv_path, "r", encoding="utf-8") as f:
         inventory = json.load(f)
 
+    # Load cluster membership — skip these, they're already correctly assigned
+    membership_path = os.path.join(base_dir, "cluster_membership.json")
+    membership = {}
+    if os.path.exists(membership_path):
+        with open(membership_path, "r", encoding="utf-8") as f:
+            membership = json.load(f)
+
+    # Load abstracts for fallback keyword matching
+    abstracts_path = os.path.join(base_dir, "abstracts.json")
+    abstracts = {}
+    if os.path.exists(abstracts_path):
+        with open(abstracts_path, "r", encoding="utf-8") as f:
+            abstracts = json.load(f)
+        print(f"Using AI-generated abstracts ({len(abstracts)} labels)")
+
     print(f"Loading conversations from: {backup_dir}")
     all_convs = load_conversations(backup_dir)
     conv_by_id = {c.get("id", ""): c for c in all_convs}
@@ -110,14 +126,27 @@ def main():
     for item in inventory:
         if item["category"] != "uncategorized":
             continue
+        # Skip conversations with cluster membership (shouldn't be uncategorized,
+        # but guard against edge cases)
+        if item["id"] in membership:
+            continue
 
         conv = conv_by_id.get(item["id"])
         if not conv:
             still_uncategorized += 1
             continue
 
-        search_text = extract_analysis_text(conv, item["title"])
-        best_cat = score_categories(search_text, categories)
+        # Try abstract first (precise, 1 strong hit sufficient)
+        abstract = abstracts.get(item["id"], "")
+        best_cat = None
+        if abstract:
+            abstract_text = (item["title"] + " " + abstract).lower()
+            best_cat = score_categories(abstract_text, categories, min_confidence=3, min_hits=1)
+
+        # Fall back to raw conversation text (needs 3+ distinct keyword hits)
+        if not best_cat:
+            search_text = extract_analysis_text(conv, item["title"])
+            best_cat = score_categories(search_text, categories, min_confidence=4, min_hits=4)
 
         if best_cat:
             item["category"] = best_cat

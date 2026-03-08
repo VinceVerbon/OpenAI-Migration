@@ -64,8 +64,13 @@ def detect_custom_gpt(conv):
     return False
 
 
-def categorize(search_text, categories):
-    """Simple keyword match — returns best category or 'uncategorized'."""
+def categorize(search_text, categories, min_score=1):
+    """Simple keyword match — returns best category or 'uncategorized'.
+
+    min_score: minimum keyword matches required.
+        1 when matching against abstract text (already topically precise).
+        2 when matching against raw conversation text (needs stronger evidence).
+    """
     best_score = 0
     best_cat = "uncategorized"
     for cat, keywords in categories.items():
@@ -78,7 +83,7 @@ def categorize(search_text, categories):
         if score > best_score:
             best_score = score
             best_cat = cat
-    return best_cat if best_score > 0 else "uncategorized"
+    return best_cat if best_score >= min_score else "uncategorized"
 
 
 def check_outdated(search_text, triage_config):
@@ -104,6 +109,23 @@ def main():
 
     skip_threshold = triage_config.get("skip_threshold", 2)
     skip_candidate_threshold = triage_config.get("skip_candidate_threshold", 5)
+
+    # Load cluster membership (direct conv_id → category from discovery)
+    base_dir = os.path.dirname(args.config) or "."
+    membership_path = os.path.join(base_dir, "cluster_membership.json")
+    membership = {}
+    if os.path.exists(membership_path):
+        with open(membership_path, "r", encoding="utf-8") as f:
+            membership = json.load(f)
+        print(f"Using cluster membership ({len(membership)} direct assignments)")
+
+    # Load abstracts as fallback for non-clustered conversations
+    abstracts_path = os.path.join(base_dir, "abstracts.json")
+    abstracts = {}
+    if os.path.exists(abstracts_path):
+        with open(abstracts_path, "r", encoding="utf-8") as f:
+            abstracts = json.load(f)
+        print(f"Using AI-generated abstracts ({len(abstracts)} labels)")
 
     print(f"Loading conversations from: {backup_dir}")
     all_convs = load_conversations(backup_dir)
@@ -136,14 +158,29 @@ def main():
         )
         language = detect_language(title + " " + user_text)
 
-        # Categorize
-        search_text = (title + " " + first_user).lower()
-
+        search_text = ""
         if title.lower().strip() in already_processed:
             category = "already-processed"
             triage = "done"
+        elif conv_id in membership:
+            # Direct assignment from discovery clustering — most reliable
+            category = membership[conv_id]
+            if msg_count <= skip_threshold:
+                triage = "skip"
+            elif msg_count <= skip_candidate_threshold:
+                triage = "skip-candidate"
+            else:
+                triage = "review"
         else:
-            category = categorize(search_text, categories)
+            # Fallback: keyword matching against abstract or conversation text
+            abstract = abstracts.get(conv_id, "")
+            if abstract:
+                search_text = (title + " " + abstract).lower()
+                min_score = 2  # Even abstracts need 2+ keyword matches
+            else:
+                search_text = (title + " " + first_user).lower()
+                min_score = 2
+            category = categorize(search_text, categories, min_score=min_score)
 
             # Triage
             if msg_count <= skip_threshold:
@@ -156,6 +193,8 @@ def main():
         # Outdated check
         outdated_reason = None
         if triage in ("review", "skip-candidate"):
+            if not search_text:
+                search_text = (title + " " + first_user).lower()
             outdated_reason = check_outdated(search_text, triage_config)
             if outdated_reason:
                 triage = "outdated"

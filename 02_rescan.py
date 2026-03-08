@@ -49,7 +49,7 @@ def extract_messages(conv):
     return messages
 
 
-def categorize_deep(search_text, categories):
+def categorize_deep(search_text, categories, min_score=1):
     """Keyword match with flat or {strong, medium} keyword dicts."""
     best_score = 0
     best_cat = "uncategorized"
@@ -62,7 +62,7 @@ def categorize_deep(search_text, categories):
         if score > best_score:
             best_score = score
             best_cat = cat
-    return best_cat if best_score > 0 else None
+    return best_cat if best_score >= min_score else None
 
 
 def main():
@@ -79,6 +79,22 @@ def main():
     with open(inv_path, "r", encoding="utf-8") as f:
         inventory = json.load(f)
 
+    # Load cluster membership — conversations with direct assignment should not be re-categorized
+    base_dir = os.path.dirname(args.config) or "."
+    membership_path = os.path.join(base_dir, "cluster_membership.json")
+    membership = {}
+    if os.path.exists(membership_path):
+        with open(membership_path, "r", encoding="utf-8") as f:
+            membership = json.load(f)
+
+    # Load abstracts as fallback
+    abstracts_path = os.path.join(base_dir, "abstracts.json")
+    abstracts = {}
+    if os.path.exists(abstracts_path):
+        with open(abstracts_path, "r", encoding="utf-8") as f:
+            abstracts = json.load(f)
+        print(f"Using AI-generated abstracts ({len(abstracts)} labels)")
+
     print(f"Loading conversations from: {backup_dir}")
     all_convs = load_conversations(backup_dir)
     conv_by_id = {c.get("id", ""): c for c in all_convs}
@@ -92,6 +108,9 @@ def main():
     for item in inventory:
         if item["triage"] == "done":
             continue
+        # Don't re-categorize conversations with direct cluster assignment
+        if item["id"] in membership:
+            continue
 
         conv = conv_by_id.get(item["id"])
         if not conv:
@@ -99,12 +118,16 @@ def main():
 
         messages = extract_messages(conv)
 
-        # Build search text from title + first 3 user messages
-        user_texts = [text for _, role, text in messages if role == "user"][:3]
-        search_text = (item["title"] + " " + " ".join(user_texts)).lower()
+        # Build search text — prefer abstract over raw conversation content
+        abstract = abstracts.get(item["id"], "")
+        if abstract:
+            search_text = (item["title"] + " " + abstract).lower()
+        else:
+            user_texts = [text for _, role, text in messages if role == "user"][:3]
+            search_text = (item["title"] + " " + " ".join(user_texts)).lower()
 
-        # Re-categorize
-        new_cat = categorize_deep(search_text, categories)
+        # Re-categorize (require 2+ keyword matches)
+        new_cat = categorize_deep(search_text, categories, min_score=2)
         if new_cat and (item["category"] == "uncategorized" or new_cat != item["category"]):
             old_cat = item["category"]
             item["category"] = new_cat
