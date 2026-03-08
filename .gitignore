@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Output (generated files go to E:\MyAI\knowledge, not here)
+output/
+*.tmp
+
+# Test runs (contain generated data, not source)
+testrun*/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Sensitive
+.env

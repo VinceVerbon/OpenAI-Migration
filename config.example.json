@@ -1,0 +1,61 @@
+{
+  "backup_dir": "/path/to/your/OpenAI-Export",
+  "output_dir": "/path/to/knowledge/output",
+  "categories": {
+    "infrastructure": {
+      "strong": ["docker", "traefik", "nginx", "kubernetes", "ansible", "terraform"],
+      "medium": ["server", "ssh", "linux", "hosting", "dns", "ssl", "firewall", "backup"]
+    },
+    "development": {
+      "strong": ["def ", "function ", "class ", "import ", "console.log", "git commit"],
+      "medium": ["python", "javascript", "typescript", "react", "api", "database", "sql"]
+    },
+    "ai-tools": {
+      "strong": ["chatgpt", "gpt-4", "dall-e", "midjourney", "claude", "copilot", "ollama"],
+      "medium": ["prompt", "llm", "token", "ai model", "embedding", "fine-tune"]
+    },
+    "business": {
+      "strong": ["invoice", "client", "contract", "pricing", "strategy", "proposal"],
+      "medium": ["meeting", "project", "planning", "budget", "stakeholder", "governance"]
+    },
+    "writing": {
+      "strong": ["translate", "proofread", "rewrite", "draft", "article", "blog post"],
+      "medium": ["write", "text", "email", "newsletter", "communication", "summary"]
+    },
+    "personal": {
+      "strong": ["recipe", "travel", "holiday", "hobby", "birthday", "gift"],
+      "medium": ["health", "fitness", "family", "school", "game", "music", "book"]
+    },
+    "networking": {
+      "strong": ["vlan", "subnet", "dhcp", "access point", "mesh", "vpn", "wireguard"],
+      "medium": ["wifi", "network", "router", "switch", "ethernet", "firewall"]
+    },
+    "security": {
+      "strong": ["1password", "bitwarden", "yubikey", "passkey", "oauth", "saml", "sso"],
+      "medium": ["password", "mfa", "2fa", "authentication", "encryption", "certificate"]
+    },
+    "hardware": {
+      "strong": ["raspberry pi", "arduino", "esp32", "3d print", "nas"],
+      "medium": ["laptop", "monitor", "usb", "ssd", "firmware", "driver", "bluetooth"]
+    },
+    "media": {
+      "strong": ["premiere", "photoshop", "canva", "figma", "obs", "ffmpeg"],
+      "medium": ["video", "audio", "podcast", "design", "logo", "animation"]
+    }
+  },
+  "triage": {
+    "skip_threshold": 2,
+    "skip_candidate_threshold": 5,
+    "outdated_before": "2024-06-01",
+    "outdated_indicators": {
+      "docker": "Docker setup",
+      "nginx": "Nginx config",
+      "ssl": "SSL/certificate setup",
+      "certbot": "Certbot/Let's Encrypt"
+    },
+    "howto_signals": [
+      "how to", "how do i", "setup", "install", "configure", "set up", "getting started"
+    ]
+  },
+  "already_processed": []
+}
