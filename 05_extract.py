@@ -24,11 +24,15 @@ def load_config(path):
 def load_conversations(backup_dir):
     all_convs = []
     for i in range(100):
-        path = os.path.join(backup_dir, f"conversations-{i:03d}.json")
+        fname = f"conversations-{i:03d}.json"
+        path = os.path.join(backup_dir, fname)
         if not os.path.exists(path):
             break
         with open(path, "r", encoding="utf-8") as f:
-            all_convs.extend(json.load(f))
+            convs = json.load(f)
+        for c in convs:
+            c["_backup_file"] = fname
+        all_convs.extend(convs)
     return all_convs
 
 
@@ -84,11 +88,13 @@ def build_extract_entry(item, conv_by_id, include_language=False):
                 break
 
     entry = {
+        "id": item["id"],
         "title": item["title"],
         "date": item["date"],
         "message_count": item["message_count"],
         "triage": item["triage"],
         "custom_gpt": item.get("custom_gpt", False),
+        "backup_file": conv.get("_backup_file", ""),
         "user_messages": user_msgs,
         "assistant_responses": asst_msgs,
         "last_user_message": last_user,
@@ -236,6 +242,51 @@ def main():
             write_extract(output_path, cat_data, meta=meta)
             total_msgs = sum(c["message_count"] for c in cat_data)
             print(f"  {cat}: {len(cat_data)} chats, {total_msgs} total messages")
+
+    # Backfill IDs and backup_file into existing extract files that were
+    # generated before these fields were added (conversations marked 'done'
+    # won't be re-extracted, so we patch in place)
+    inv_by_title_date = {}
+    conv_backup_file = {}
+    for item in inventory:
+        key = (item["title"], item["date"])
+        inv_by_title_date[key] = item["id"]
+    for c in all_convs:
+        conv_backup_file[c.get("id", "")] = c.get("_backup_file", "")
+
+    backfilled = 0
+    for fname in os.listdir(extracts_dir):
+        if not fname.endswith(".json") or fname == "uncategorized.json":
+            continue
+        fpath = os.path.join(extracts_dir, fname)
+        with open(fpath, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        if isinstance(data, dict) and "conversations" in data:
+            convs = data["conversations"]
+        else:
+            continue
+
+        changed = False
+        for conv in convs:
+            if not conv.get("id"):
+                key = (conv.get("title", ""), conv.get("date", ""))
+                if key in inv_by_title_date:
+                    conv["id"] = inv_by_title_date[key]
+                    changed = True
+            if not conv.get("backup_file") and conv.get("id"):
+                bf = conv_backup_file.get(conv["id"], "")
+                if bf:
+                    conv["backup_file"] = bf
+                    changed = True
+
+        if changed:
+            with open(fpath, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            backfilled += 1
+
+    if backfilled:
+        print(f"Backfilled IDs in {backfilled} existing extract files")
 
     # Also extract uncategorized for reference
     uncat_items = [

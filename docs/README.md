@@ -14,8 +14,9 @@ You exported your ChatGPT history — now what? It's a blob of hundreds (or thou
 2. **Discovers** natural topic clusters from those labels — no predefined categories needed
 3. **Categorizes** every conversation using a three-tier system (cluster membership → abstract matching → keyword matching)
 4. **Triages** what's worth keeping vs. trivial or outdated
-5. **Extracts** valuable content per category into structured JSON
+5. **Extracts** valuable content per category into structured JSON (with source traceability)
 6. **Distills** extracts into condensed knowledge files via AI
+7. **Links** each knowledge file back to its source conversations in the local backup
 
 ---
 
@@ -59,10 +60,11 @@ You exported your ChatGPT history — now what? It's a blob of hundreds (or thou
                                 │
                                 ▼
    ┌───────────────────────────────────────────────────────────┐
-   │  Step 6   (Claude Code)                                    │
+   │  Step 6   (AI inference + automated)                         │
    │  06_distill.py                                             │
    │                                                           │
-   │  Condenses extracts → knowledge/learning-*.md              │
+   │  AI condenses extracts → knowledge/learning-*.md           │
+   │  --add-sources appends local backup file references        │
    └───────────────────────────────────────────────────────────┘
 ```
 
@@ -76,8 +78,8 @@ You exported your ChatGPT history — now what? It's a blob of hundreds (or thou
 | `config.json` | `00_discover.py` | All pipeline steps | Categories, keywords, triage rules |
 | `inventory.json` | `01_scan.py` | Steps `02`–`06` | One entry per conversation with category + triage |
 | `CHECKLIST.md` | `03_build_checklist.py` | Human | Markdown review checklist |
-| `category_extracts/*.json` | `05_extract.py` | `06_distill.py` / Claude Code | Conversation content grouped by category |
-| `knowledge/learning-*.md` | Claude Code (distillation) | End user / AI assistants | Final knowledge files |
+| `category_extracts/*.json` | `05_extract.py` | `06_distill.py` / Claude Code | Conversation content grouped by category (with IDs + backup file refs) |
+| `knowledge/learning-*.md` | Claude Code (distillation) + `--add-sources` | End user / AI assistants | Final knowledge files with source traceability |
 
 ---
 
@@ -101,10 +103,13 @@ You exported your ChatGPT history — now what? It's a blob of hundreds (or thou
 
 ### 3. Run the Full Pipeline
 
+From a Claude Code session, just say: *"Run the full pipeline on myrun/ with seed.json"*
+
+Or run step by step:
+
 ```bash
-# Step 0a: Extract excerpts, then topic-label them in Claude Code
+# Step 0a: Extract excerpts + topic-label them (AI inference)
 python 00_abstract.py --extract --config seed.json --dir myrun/
-# → Claude Code: "Process myrun/excerpts.json and generate myrun/abstracts.json"
 
 # Step 0b: Discover categories from abstracts
 python 00_discover.py --seed myrun/seed.json
@@ -112,9 +117,11 @@ python 00_discover.py --seed myrun/seed.json
 # Steps 1–5: Automated pipeline
 python run.py --config myrun/config.json
 
-# Step 6: Distill in Claude Code
+# Step 6: Distill extracts into knowledge files (AI inference)
 python 06_distill.py --status --dir myrun/
-# → Claude Code: "Distill myrun/category_extracts/ into myrun/knowledge/"
+
+# Step 6b: Add source traceability links (automated)
+python 06_distill.py --add-sources --dir myrun/
 ```
 
 ---
@@ -432,7 +439,7 @@ For each uncategorized conversation (skipping cluster-assigned items):
 
 ### Step 05: `05_extract.py` — Content Extraction
 
-**Purpose:** Extract valuable content from each category into structured JSON files for AI distillation.
+**Purpose:** Extract valuable content from each category into structured JSON files for AI distillation, with full source traceability back to the local backup files.
 
 **Input:** `inventory.json`, raw conversations
 **Output:** `category_extracts/<category>.json`
@@ -443,33 +450,41 @@ For each conversation with `triage ∉ {skip, outdated, done}`:
 - Extract first 3 user messages (1000 chars each)
 - Extract first 2 assistant responses (1000 chars each)
 - For longer chats (6+ messages): include last user message (500 chars) for context
-- Include metadata: title, date, message count, triage, custom GPT flag
+- Include metadata: `id`, `title`, `date`, `message_count`, `triage`, `custom_gpt`, `backup_file`
 
 Each extract file contains a `_meta` header with language strategy and target language (from config), so the distillation step knows what language to write in.
 
+**Source traceability fields:**
+- `id` — conversation UUID (matches the key in the backup JSON)
+- `backup_file` — which `conversations-NNN.json` file contains this conversation
+
+**ID backfilling:** When re-running on a project where some conversations are already marked `done` (and therefore not re-extracted), the script automatically backfills `id` and `backup_file` into existing extract files by matching on `title + date` against `inventory.json`.
+
 ---
 
-### Step 06: `06_distill.py` — Knowledge Distillation
+### Step 06: `06_distill.py` — Knowledge Distillation & Source Linking
 
-**Purpose:** Condense category extracts into structured knowledge files.
+**Purpose:** Condense category extracts into structured knowledge files, then link each file back to its source conversations in the local backup.
 
-**This is a manual step requiring a Claude Code session.**
+**Distillation requires AI inference (Claude Code performs this automatically). Source linking is fully automated.**
 
 **Modes:**
 - `--status` — Show distillation progress (pending/done per category)
 - `--show-prompt` — Print the distillation prompt
+- `--add-sources` — Append `## Bronnen` section with local backup references to all knowledge files
 
 **Parameters:**
 
 | Parameter | Default | Effect |
 |-----------|---------|--------|
-| `--dir` | `.` | Run directory containing `category_extracts/` |
+| `--dir` | `.` | Run directory containing `category_extracts/` and `knowledge/` |
 
 **Workflow:**
 1. `python 06_distill.py --status --dir myrun/` — see what needs distilling
 2. In Claude Code: "Distill myrun/category_extracts/ into knowledge files in myrun/knowledge/"
 3. Claude reads each extract, condenses conversations, writes one `learning-[category]-[date].md`
 4. `python 06_distill.py --status --dir myrun/` — verify completeness
+5. `python 06_distill.py --add-sources --dir myrun/` — append source references
 
 **Output format:** `knowledge/learning-[category]-yyyymmdd.md`
 
@@ -481,8 +496,66 @@ Each extract file contains a `_meta` header with language strategy and target la
 - **Flag contradictions** when conversations contain conflicting information
 - Skip trivial `skip-candidate` conversations with no real knowledge
 - Write in the language specified by the extract's `_meta` header
+- Do NOT add a sources section — the pipeline adds it automatically
 
 **Language handling:** Translation happens at distillation time, not extraction. The `_meta` header tells Claude Code which language to produce.
+
+**Source linking (`--add-sources`):**
+
+Appends a `## Bronnen` table to each knowledge file with columns:
+
+| Column | Content |
+|--------|---------|
+| Gesprek | Conversation title |
+| Datum | Date of conversation |
+| Berichten | Message count (indicates depth of the original conversation) |
+| Bronbestand | Full path to the local backup JSON file (e.g., `//FS/Backups/AI/.../conversations-003.json`) |
+| Gesprek-ID | UUID to search for within that backup file |
+
+This provides full traceability from any distilled knowledge item back to the complete original conversation in the local backup — no dependency on ChatGPT being online or the account existing.
+
+**Idempotent:** Re-running `--add-sources` replaces existing Bronnen sections. Safe to re-run after re-extraction or reorganization.
+
+---
+
+### Post-Distillation: `reorganize_knowledge.py` — Topical Cleanup (Optional)
+
+**Purpose:** Move misplaced sections between knowledge files after distillation.
+
+The categorization pipeline achieves ~95% accuracy, but ~5% of conversations end up in the wrong category. After distillation, this surfaces as sections that don't belong in their file's topic. This script automates the cleanup.
+
+**Parameters:**
+
+| Parameter | Default | Effect |
+|-----------|---------|--------|
+| `--dir` | — | Knowledge directory path |
+| `--dry-run` | — | Show planned moves without executing |
+
+**Usage:**
+```bash
+# Preview what will be moved
+python reorganize_knowledge.py --dir myrun/knowledge --dry-run
+
+# Execute moves
+python reorganize_knowledge.py --dir myrun/knowledge
+```
+
+**How it works:**
+1. Reads all `learning-*.md` files
+2. Splits each file by `##` headings
+3. Matches section headings against a curated `MOVES` list (source → destination)
+4. Removes matched sections from source files, appends them to destination files
+5. Sections with no matching category go to `learning-various-[date].md`
+6. Deletes files that become empty after all their sections are moved
+
+**The MOVES list** is curated by reviewing all knowledge files for topical consistency (typically via AI agents reading each file). It lives in the script as a Python list of `(source_category, heading_substring, destination_category)` tuples.
+
+**Workflow for populating the MOVES list:**
+1. Have AI agents read all knowledge files in batches (25-30 files per agent)
+2. For each file, flag sections that don't belong topically
+3. Suggest destination categories from the existing 126-category list
+4. Add entries to the MOVES list
+5. Run with `--dry-run` to verify, then execute
 
 ---
 
@@ -632,8 +705,9 @@ AIKnowledgeDistill/
 ├── 04_deep_categorize.py   # Step 4: Weighted keyword scoring
 ├── 04b_classify.py         # Step 4b: TF-IDF statistical classifier
 ├── 05_extract.py           # Step 5: Content extraction
-├── 06_distill.py           # Step 6: Knowledge distillation (Claude Code)
+├── 06_distill.py           # Step 6: Knowledge distillation + source linking
 ├── 06_suggest_keywords.py  # Optional: keyword suggestions
+├── reorganize_knowledge.py # Optional: post-distillation topical cleanup
 ├── run.py                  # Pipeline orchestrator (steps 1–5)
 ├── shared.py               # Shared utilities
 ├── docs/
@@ -645,9 +719,10 @@ AIKnowledgeDistill/
     ├── config.json          # 92 categories
     ├── inventory.json       # 1308 conversations
     ├── CHECKLIST.md
-    ├── category_extracts/   # 126 extract files
+    ├── category_extracts/   # 126 extract files (with conv IDs + backup refs)
     └── knowledge/           # Distilled knowledge files
-        ├── learning-docker-compose-20260308.md
+        ├── learning-docker-compose-20260308.md  # includes ## Bronnen section
+        ├── learning-various-20260308.md         # catch-all for orphan sections
         └── ...
 ```
 
@@ -655,35 +730,60 @@ AIKnowledgeDistill/
 
 ## Typical Workflows
 
-### Full Pipeline (Recommended)
+### Full Pipeline from Claude Code (Recommended)
+
+When run from a Claude Code session, the entire pipeline is **end-to-end automated** — Claude Code both executes the Python scripts and performs the AI inference steps (topic labeling and distillation). No manual intervention required.
+
+```
+"Run the full AIKnowledgeDistill pipeline on myrun/ with seed.json"
+```
+
+Claude Code will execute all steps in sequence:
 
 ```bash
 mkdir myrun
 
-# Step 0a: Generate topic labels
+# Step 0a: Extract excerpts, then topic-label them (AI inference)
 python 00_abstract.py --extract --config seed.json --dir myrun/
-# → In Claude Code: "Process myrun/excerpts.json → myrun/abstracts.json"
+# Claude Code reads excerpts.json and generates abstracts.json
 
-# Step 0b: Discover categories
+# Step 0b: Discover categories from abstracts
 python 00_discover.py --seed myrun/seed.json
 
-# Steps 1–5: Automated
+# Steps 1–5: Automated Python pipeline
 python run.py --config myrun/config.json
 
-# Step 6: Distill
-python 06_distill.py --status --dir myrun/
-# → In Claude Code: "Distill myrun/category_extracts/ → myrun/knowledge/"
+# Step 6: Distill extracts into knowledge files (AI inference)
+# Claude Code reads each category_extract and writes learning-*.md files
 
-# Verify
-python 06_distill.py --status --dir myrun/
+# Step 6b: Add source traceability (automated)
+python 06_distill.py --add-sources --dir myrun/
+
+# Optional: Reorganize misplaced content
+python reorganize_knowledge.py --dir myrun/knowledge
+python 06_distill.py --add-sources --dir myrun/  # re-link after reorg
 ```
 
-### Quick Start — No Claude Code
+### Without Claude Code (Standalone)
+
+Steps 0a and 6 require AI inference. Without Claude Code, you need to provide
+topic labels and distillation via another LLM (API calls, ChatGPT, etc.).
 
 ```bash
-# Uses fallback word-frequency clustering (lower quality but fully automated)
-python 00_discover.py --seed seed.json
-python run.py --config config.json
+# Step 0a: Extract excerpts
+python 00_abstract.py --extract --config seed.json --dir myrun/
+# → Feed myrun/excerpts.json to an LLM → save as myrun/abstracts.json
+
+# Step 0b + Steps 1–5: Fully automated
+python 00_discover.py --seed myrun/seed.json
+python run.py --config myrun/config.json
+
+# Step 6: Feed each category_extract to an LLM with the distillation prompt
+python 06_distill.py --show-prompt  # get the prompt
+# → LLM writes knowledge/learning-*.md files
+
+# Step 6b: Add source traceability (automated)
+python 06_distill.py --add-sources --dir myrun/
 ```
 
 ### Iterative Improvement
@@ -711,7 +811,11 @@ Validated against a 1,308-conversation ChatGPT export (April 2023 — March 2026
 | Overall accuracy | ~95% |
 | Categories produced | 92 |
 | Distillable categories (3+ qualifying) | 77 |
-| Knowledge files produced | 77 |
+| Knowledge files produced (after distillation) | 126 |
+| Knowledge files after reorganization | 121 (6 emptied, 1 catch-all added) |
+| Misplaced sections identified | 130 |
+| Sections moved to correct file | 130 |
+| Source-linked knowledge files | 120 |
 
 ### Quality by Tier
 

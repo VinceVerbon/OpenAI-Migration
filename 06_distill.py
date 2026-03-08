@@ -96,6 +96,9 @@ Your task: condense ALL conversations into a single structured knowledge file.
 
 ...
 ```
+
+NOTE: Do NOT add a sources/references section. Source links are added automatically
+by the pipeline after distillation (via `06_distill.py --add-sources`).
 """
 
 
@@ -183,6 +186,84 @@ def scan_knowledge(knowledge_dir):
     return existing
 
 
+def add_sources(extracts_dir, knowledge_dir, backup_dir=None):
+    """Append ## Bronnen section with local backup file references to knowledge files."""
+    extracts = scan_extracts(extracts_dir)
+    existing = scan_knowledge(knowledge_dir)
+
+    updated = 0
+    skipped_no_ids = 0
+
+    for ext in extracts:
+        cat = ext["category"]
+        if cat not in existing:
+            continue
+
+        # Find the knowledge file
+        knowledge_file = None
+        for fname in os.listdir(knowledge_dir):
+            if fname.startswith(f"learning-{cat}-") and fname.endswith(".md"):
+                knowledge_file = os.path.join(knowledge_dir, fname)
+                break
+        if not knowledge_file:
+            continue
+
+        # Read extract to get conversation IDs
+        with open(ext["filepath"], "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        if isinstance(data, dict) and "conversations" in data:
+            convs = data["conversations"]
+        else:
+            convs = data if isinstance(data, list) else []
+
+        # Check if any conversations have IDs
+        convs_with_ids = [c for c in convs if c.get("id")]
+        if not convs_with_ids:
+            skipped_no_ids += 1
+            continue
+
+        # Read existing knowledge file
+        with open(knowledge_file, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        # Remove existing Bronnen section if present (for re-runs)
+        bronnen_marker = "\n## Bronnen\n"
+        if bronnen_marker in content:
+            content = content[:content.index(bronnen_marker)]
+
+        # Build sources section
+        lines = ["\n## Bronnen\n"]
+        lines.append("| Gesprek | Datum | Berichten | Bronbestand | Gesprek-ID |")
+        lines.append("|---------|-------|-----------|-------------|------------|")
+        for c in sorted(convs_with_ids, key=lambda x: x.get("date", "")):
+            title = c.get("title", "Untitled")
+            conv_id = c["id"]
+            conv_date = c.get("date", "?")
+            msg_count = c.get("message_count", "?")
+            backup_file = c.get("backup_file", "")
+
+            if backup_file and backup_dir:
+                file_ref = f"`{backup_dir}/{backup_file}`"
+            elif backup_file:
+                file_ref = f"`{backup_file}`"
+            else:
+                file_ref = ""
+
+            lines.append(f"| {title} | {conv_date} | {msg_count} | {file_ref} | `{conv_id}` |")
+
+        content = content.rstrip("\n") + "\n" + "\n".join(lines) + "\n"
+
+        with open(knowledge_file, "w", encoding="utf-8") as f:
+            f.write(content)
+        updated += 1
+
+    print(f"Added source links to {updated} knowledge files")
+    if skipped_no_ids:
+        print(f"Skipped {skipped_no_ids} files (extracts missing conversation IDs)")
+        print("Re-run 05_extract.py to add IDs, then re-run --add-sources")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Distill category extracts into knowledge files"
@@ -193,6 +274,8 @@ def main():
                        help="Run directory containing category_extracts/")
     parser.add_argument("--show-prompt", action="store_true",
                        help="Print the distillation prompt and exit")
+    parser.add_argument("--add-sources", action="store_true",
+                       help="Append source links to existing knowledge files")
     args = parser.parse_args()
 
     if args.show_prompt:
@@ -201,6 +284,17 @@ def main():
 
     extracts_dir = os.path.join(args.dir, "category_extracts")
     knowledge_dir = os.path.join(args.dir, "knowledge")
+
+    if args.add_sources:
+        # Read backup_dir from config for full file paths in source references
+        config_path = os.path.join(args.dir, "config.json")
+        backup_dir = None
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = json.load(f)
+            backup_dir = config.get("backup_dir")
+        add_sources(extracts_dir, knowledge_dir, backup_dir=backup_dir)
+        return
 
     if not args.status:
         print("Usage:")
