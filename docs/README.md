@@ -522,7 +522,7 @@ This provides full traceability from any distilled knowledge item back to the co
 
 **Purpose:** Move misplaced sections between knowledge files after distillation.
 
-**⚠ Cost warning:** This step requires AI agents to read ALL knowledge files in depth to identify misplaced content. For a 120-file run, expect ~250K tokens across 5 parallel review agents. The MOVES list must be curated from the review results before the script can run. Only proceed if topical consistency matters for your use case.
+**⚠ Cost warning:** This step requires AI agents to read ALL knowledge files in depth to identify misplaced content. This has a high token cost relative to the rest of the pipeline. The MOVES list must be curated from the review results before the script can run. Only proceed if topical consistency matters for your use case.
 
 The categorization pipeline achieves ~95% accuracy, but ~5% of conversations end up in the wrong category. After distillation, this surfaces as sections that don't belong in their file's topic. This script automates the cleanup.
 
@@ -764,7 +764,7 @@ python 06_distill.py --add-sources --dir myrun/
 
 At this point, the pipeline is complete. Claude Code should **ask the user** whether to run the optional post-distillation reorganization:
 
-> *"Knowledge files are ready. ~5% of sections may be topically misplaced due to categorization noise. I can review all files and reorganize misplaced content, but this costs ~250K tokens (5 parallel agents reading every file). Want me to proceed?"*
+> *"Knowledge files are ready. ~5% of sections may be topically misplaced due to categorization noise. I can review all files and reorganize misplaced content, but this has a high token cost relative to the rest of the pipeline (all knowledge files are read in depth by parallel agents). Want me to proceed?"*
 
 If the user agrees:
 
