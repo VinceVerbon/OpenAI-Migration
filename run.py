@@ -15,7 +15,7 @@ import glob
 
 # Add script directory to path for shared imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from shared import check_mapped_drive
+from shared import check_mapped_drive, normalize_path
 
 STEPS = [
     ("01_scan.py", "Scan & initial categorization"),
@@ -115,7 +115,8 @@ def validate_config(config_path):
     with open(config_path, "r", encoding="utf-8") as f:
         config = json.load(f)
 
-    backup_dir = config.get("backup_dir", "")
+    backup_dir = normalize_path(config.get("backup_dir", ""))
+    config["backup_dir"] = backup_dir
     if not backup_dir or backup_dir.startswith("/path/to"):
         print(f"ERROR: backup_dir in config is not set.")
         print(f"Edit {config_path} and set backup_dir to your OpenAI export location.")

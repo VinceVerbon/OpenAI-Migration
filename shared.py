@@ -8,6 +8,47 @@ import sys
 
 # ─── Path Validation ────────────────────────────────────────────────────────
 
+def normalize_path(path):
+    """Normalize a file path, fixing over-escaped backslashes.
+
+    AI tools (including Claude Code) tend to over-escape backslashes in UNC
+    paths, turning \\\\server\\share into \\\\\\\\server\\\\share or worse.
+    This function collapses any run of 2+ backslashes down to the correct
+    number and normalizes the path.
+
+    Returns the cleaned path string.
+    """
+    if not path:
+        return path
+
+    # Collapse runs of 3+ backslashes down to 2 (UNC prefix) or 1 (separator)
+    # First, preserve a leading UNC prefix if present
+    # Strip ALL leading backslashes, then figure out what it should be
+    stripped = path.lstrip("\\").lstrip("/")
+
+    # If the original started with 2+ backslashes, it's a UNC path
+    leading_backslashes = len(path) - len(path.lstrip("\\"))
+    if leading_backslashes >= 2:
+        # UNC path — restore exactly 2 leading backslashes
+        path = "\\\\" + stripped
+    elif leading_backslashes == 1:
+        path = "\\" + stripped
+
+    # Collapse any remaining runs of multiple backslashes to single
+    path = re.sub(r"\\{2,}", r"\\", path)
+
+    # But if it was UNC, the leading \\ got collapsed to \ — fix that
+    if leading_backslashes >= 2:
+        if path.startswith("\\") and not path.startswith("\\\\"):
+            path = "\\" + path
+
+    # Also normalize forward slashes to backslashes on Windows
+    if sys.platform == "win32":
+        path = os.path.normpath(path)
+
+    return path
+
+
 def check_mapped_drive(path):
     """Warn if path is on a mapped network drive (Windows only).
 

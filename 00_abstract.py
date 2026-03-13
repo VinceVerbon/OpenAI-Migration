@@ -28,7 +28,7 @@ import sys
 import argparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from shared import check_mapped_drive
+from shared import check_mapped_drive, normalize_path
 
 sys.stdout.reconfigure(encoding="utf-8")
 
@@ -169,7 +169,7 @@ def main():
     with open(args.config, "r", encoding="utf-8") as f:
         config = json.load(f)
 
-    backup_dir = config.get("backup_dir")
+    backup_dir = normalize_path(config.get("backup_dir", ""))
     if not backup_dir:
         print("ERROR: config must contain backup_dir")
         sys.exit(1)

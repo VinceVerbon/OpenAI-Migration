@@ -47,7 +47,7 @@ import argparse
 import math
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from shared import check_mapped_drive
+from shared import check_mapped_drive, normalize_path
 from collections import Counter, defaultdict
 from datetime import datetime
 from shared import tokenize, STOP_WORDS, GENERIC_WORDS, detect_language, LANG_MARKERS, LANG_NAMES
@@ -481,7 +481,7 @@ def main():
         with open(args.seed, "r", encoding="utf-8") as f:
             seed = json.load(f)
 
-    backup_dir = args.backup or seed.get("backup_dir")
+    backup_dir = normalize_path(args.backup or seed.get("backup_dir", ""))
     if not backup_dir:
         print("ERROR: Provide --backup /path/to/export or a seed config with backup_dir")
         sys.exit(1)
