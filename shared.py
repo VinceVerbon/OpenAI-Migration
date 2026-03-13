@@ -1,7 +1,46 @@
 """
 Shared utilities for AIKnowledgeDistill pipeline scripts.
 """
+import os
 import re
+import sys
+
+
+# ─── Path Validation ────────────────────────────────────────────────────────
+
+def check_mapped_drive(path):
+    """Warn if path is on a mapped network drive (Windows only).
+
+    Mapped drive letters (e.g., Z:\\) don't resolve in all environments,
+    including Claude Code. Returns True if the path is problematic.
+    Prints a warning with UNC path suggestion if detected.
+    """
+    if sys.platform != "win32":
+        return False
+
+    # Already a UNC path — no problem
+    if path.startswith("\\\\"):
+        return False
+
+    drive = os.path.splitdrive(path)[0]
+    if not drive or len(drive) != 2 or drive[1] != ":":
+        return False
+
+    try:
+        import ctypes
+        drive_type = ctypes.windll.kernel32.GetDriveTypeW(drive + "\\")
+        # 4 = DRIVE_REMOTE (mapped network drive)
+        if drive_type == 4:
+            print(f"WARNING: {drive}\\ is a mapped network drive.")
+            print(f"  Mapped drives may not resolve in all environments (e.g., Claude Code).")
+            print(f"  Use the full UNC path instead (e.g., \\\\server\\share\\...)")
+            print(f"  To find the UNC path, run: net use {drive}")
+            return True
+    except (AttributeError, OSError):
+        # Not on Windows or ctypes not available — skip check
+        pass
+
+    return False
 
 
 # ─── Language Detection ──────────────────────────────────────────────────────

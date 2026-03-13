@@ -27,6 +27,9 @@ import os
 import sys
 import argparse
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from shared import check_mapped_drive
+
 sys.stdout.reconfigure(encoding="utf-8")
 
 
@@ -170,6 +173,8 @@ def main():
     if not backup_dir:
         print("ERROR: config must contain backup_dir")
         sys.exit(1)
+
+    check_mapped_drive(backup_dir)
 
     if not os.path.exists(backup_dir):
         print(f"ERROR: Directory not found: {backup_dir}")

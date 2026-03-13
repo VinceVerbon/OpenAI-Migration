@@ -13,6 +13,10 @@ import time
 import json
 import glob
 
+# Add script directory to path for shared imports
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from shared import check_mapped_drive
+
 STEPS = [
     ("01_scan.py", "Scan & initial categorization"),
     ("02_rescan.py", "Deeper re-categorization"),
@@ -116,6 +120,8 @@ def validate_config(config_path):
         print(f"ERROR: backup_dir in config is not set.")
         print(f"Edit {config_path} and set backup_dir to your OpenAI export location.")
         sys.exit(1)
+
+    check_mapped_drive(backup_dir)
 
     if not os.path.exists(backup_dir):
         print(f"ERROR: backup_dir does not exist: {backup_dir}")

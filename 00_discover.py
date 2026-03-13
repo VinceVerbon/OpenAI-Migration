@@ -45,6 +45,9 @@ import sys
 import re
 import argparse
 import math
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from shared import check_mapped_drive
 from collections import Counter, defaultdict
 from datetime import datetime
 from shared import tokenize, STOP_WORDS, GENERIC_WORDS, detect_language, LANG_MARKERS, LANG_NAMES
@@ -482,6 +485,8 @@ def main():
     if not backup_dir:
         print("ERROR: Provide --backup /path/to/export or a seed config with backup_dir")
         sys.exit(1)
+
+    check_mapped_drive(backup_dir)
 
     if not os.path.exists(backup_dir):
         print(f"ERROR: Directory not found: {backup_dir}")
