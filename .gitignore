@@ -5,7 +5,7 @@ __pycache__/
 .venv/
 venv/
 
-# Output (generated files go to E:\MyAI\knowledge, not here)
+# Output (generated files, not source)
 output/
 *.tmp
 
@@ -26,3 +26,7 @@ Thumbs.db
 
 # Sensitive
 .env
+
+# AI tool config (contains local paths, not for public repo)
+CLAUDE.md
+.claude/
