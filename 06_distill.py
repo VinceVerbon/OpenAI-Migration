@@ -127,6 +127,27 @@ def get_language_instruction(meta):
         return "Write in English."
 
 
+def parse_selection_file(selection_path):
+    """Parse custom-user-selection.md and return set of selected category names.
+
+    Returns None if file doesn't exist (meaning: select all).
+    Returns a set of category names that are checked [x].
+    """
+    if not os.path.exists(selection_path):
+        return None
+
+    selected = set()
+    with open(selection_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("- [x] "):
+                rest = line[6:]  # after "- [x] "
+                cat = rest.split(" (")[0].strip()
+                if cat:
+                    selected.add(cat)
+    return selected
+
+
 def scan_extracts(extracts_dir):
     """Scan category extract files and return their metadata."""
     results = []
@@ -314,16 +335,29 @@ def main():
         print("Run the pipeline first: python run.py --config config.json")
         return
 
+    # Check for user selection file
+    selection_path = os.path.join(args.dir, "custom-user-selection.md")
+    selected = parse_selection_file(selection_path)
+    has_selection = selected is not None
+
     print(f"{'=' * 60}")
     print(f"DISTILLATION STATUS")
     print(f"{'=' * 60}")
+
+    if has_selection:
+        total_cats = len([e for e in extracts if e["category"] != "uncategorized"])
+        excluded = total_cats - len([e for e in extracts if e["category"] in selected])
+        print(f"\nSelection: {selection_path}")
+        print(f"  {len(selected)} selected, {excluded} excluded")
+    else:
+        print(f"\nSelection: all categories (no custom-user-selection.md found)")
 
     # Language info
     if extracts:
         meta = extracts[0].get("meta", {})
         strategy = meta.get("language_strategy", "unknown")
         target = meta.get("target_language", "")
-        print(f"\nLanguage: {strategy}", end="")
+        print(f"Language: {strategy}", end="")
         if target:
             print(f" → {target}")
         else:
@@ -336,10 +370,15 @@ def main():
 
     pending = 0
     done = 0
+    excluded_count = 0
     for ext in extracts:
         cat = ext["category"]
         output_name = f"learning-{cat}-{today}.md"
-        if cat in existing:
+
+        if has_selection and cat not in selected:
+            status = "✗ excluded"
+            excluded_count += 1
+        elif cat in existing:
             status = "✓ done"
             done += 1
         else:
@@ -349,7 +388,10 @@ def main():
         print(f"{cat:<30s} {ext['conv_count']:>5d} {ext['total_messages']:>5d}  {status:<12s}  {output_name}")
 
     print(f"\n{'─' * 60}")
-    print(f"Total: {len(extracts)} categories, {done} done, {pending} pending")
+    parts = [f"{len(extracts)} categories", f"{done} done", f"{pending} pending"]
+    if excluded_count:
+        parts.append(f"{excluded_count} excluded")
+    print(f"Total: {', '.join(parts)}")
     print(f"Output directory: {knowledge_dir}/")
 
     if pending > 0:
@@ -360,6 +402,8 @@ def main():
         print(f'  "Distill {extracts_dir}/ into knowledge files in {knowledge_dir}/"')
         print(f"\nClaude Code will process each pending category extract,")
         print(f"condense the conversations, and write structured markdown files.")
+        if has_selection:
+            print(f"\nNote: {excluded_count} categories excluded by custom-user-selection.md")
         print(f"\nOutput: {knowledge_dir}/learning-[category]-{today}.md")
     else:
         print(f"\nAll categories distilled! Knowledge files in {knowledge_dir}/")
