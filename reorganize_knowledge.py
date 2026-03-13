@@ -114,7 +114,7 @@ MOVES = [
     ("model-generated", "OSI Use Cases", "capability-mapping"),
     ("model-generated", "ArchiMate: Access", "archimate-bpmn"),
     ("name-suggestions", "Websiteplatform", "various"),
-    ("name-suggestions", "Website Syquens", "various"),
+    ("name-suggestions", "Company Website", "various"),
     ("name-suggestions", "Open Source Planning", "planning-folder"),
     ("performance-vps", "Audio Interfaces", "music-classical"),
     ("performance-vps", "Apple Pencil", "various"),
